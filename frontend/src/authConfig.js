@@ -15,7 +15,7 @@ if (!TENANT_ID || !CLIENT_ID) {
 
 export const msalConfig = {
   auth: {
-    clientId:              a4413b75-4069-48e0-b055-55dce319dfbc,
+    clientId:              `a4413b75-4069-48e0-b055-55dce319dfbc`,
     authority:             `https://login.microsoftonline.com/${12f2a4b5-4935-464d-9dae-e0525d0c593f}`,
     redirectUri:           window.location.origin,
     postLogoutRedirectUri: window.location.origin,
