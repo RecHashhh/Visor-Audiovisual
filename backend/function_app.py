@@ -19,6 +19,7 @@ from azure.storage.blob import (
     generate_blob_sas,
     BlobSasPermissions,
 )
+from azure.core.exceptions import ResourceNotFoundError
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
@@ -28,9 +29,7 @@ ACCOUNT_NAME = os.environ.get("AZURE_STORAGE_ACCOUNT", "ripconaudiovisual")
 ACCOUNT_KEY  = os.environ.get("AZURE_STORAGE_KEY", "")
 CONTAINER    = os.environ.get("BLOB_CONTAINER", "audiovisual")
 CACHE_TTL_SECONDS = int(os.environ.get("CACHE_TTL_SECONDS", "45"))
-
-# Share store en memoria
-_shares: Dict[str, Dict] = {}
+SHARES_PREFIX = os.environ.get("SHARES_PREFIX", "_shares")
 
 # Cache simple en memoria para acelerar lecturas repetidas.
 _cache: Dict[str, Dict[str, Any]] = {}
@@ -137,6 +136,47 @@ def make_sas_url(blob_path: str, expiry_minutes: int = 60) -> str:
         expiry=expiry,
     )
     return f"https://{ACCOUNT_NAME}.blob.core.windows.net/{CONTAINER}/{blob_path}?{sas}"
+
+def share_blob_name(token: str) -> str:
+    return f"{SHARES_PREFIX.strip('/')}/{token}.json"
+
+def save_share(share: Dict[str, Any]) -> None:
+    svc = get_blob_service()
+    bc = svc.get_blob_client(container=CONTAINER, blob=share_blob_name(share["token"]))
+    bc.upload_blob(json.dumps(share, ensure_ascii=False), overwrite=True, content_type="application/json")
+
+def load_share(token: str) -> Optional[Dict[str, Any]]:
+    svc = get_blob_service()
+    bc = svc.get_blob_client(container=CONTAINER, blob=share_blob_name(token))
+    try:
+        raw = bc.download_blob().readall()
+        return json.loads(raw.decode("utf-8"))
+    except ResourceNotFoundError:
+        return None
+
+def delete_share(token: str) -> None:
+    svc = get_blob_service()
+    bc = svc.get_blob_client(container=CONTAINER, blob=share_blob_name(token))
+    try:
+        bc.delete_blob(delete_snapshots="include")
+    except ResourceNotFoundError:
+        return
+
+def list_shares() -> list:
+    svc = get_blob_service()
+    cc = svc.get_container_client(CONTAINER)
+    result = []
+    prefix = f"{SHARES_PREFIX.strip('/')}/"
+    for blob in cc.list_blobs(name_starts_with=prefix):
+        try:
+            bc = cc.get_blob_client(blob)
+            raw = bc.download_blob().readall()
+            share = json.loads(raw.decode("utf-8"))
+            if isinstance(share, dict) and share.get("token"):
+                result.append(share)
+        except Exception:
+            continue
+    return result
 
 
 def build_thumbnail_bytes(raw_bytes: bytes, max_width: int = 480, quality: int = 72) -> bytes:
@@ -401,10 +441,11 @@ def share_create(req: func.HttpRequest) -> func.HttpResponse:
         expires_at = datetime.now(timezone.utc) + timedelta(days=expiry_days)
         origin     = req.headers.get("Origin", "")
 
-        _shares[token] = {
+        share_data = {
             "token": token, "projectId": project_id, "week": week,
             "expiresAt": expires_at.isoformat(), "active": True,
         }
+        save_share(share_data)
         return ok({
             "token":    token,
             "shareUrl": f"{origin}/share/{token}",
@@ -425,11 +466,16 @@ def share_list(req: func.HttpRequest) -> func.HttpResponse:
     if not is_authenticated(req):
         return err("No autorizado", 401)
 
-    now    = datetime.now(timezone.utc)
-    result = [{**s, "expired": datetime.fromisoformat(s["expiresAt"]) < now}
-              for s in _shares.values()]
-    result.sort(key=lambda x: x["expiresAt"], reverse=True)
-    return ok(result)
+    try:
+        now = datetime.now(timezone.utc)
+        shares = list_shares()
+        result = [{**s, "expired": datetime.fromisoformat(s["expiresAt"]) < now}
+                  for s in shares]
+        result.sort(key=lambda x: x.get("expiresAt", ""), reverse=True)
+        return ok(result)
+    except Exception as exc:
+        logging.error("share_list: %s", exc)
+        return err(str(exc), 500)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -445,11 +491,15 @@ def share_resolve(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "DELETE":
         if not is_authenticated(req):
             return err("No autorizado", 401)
-        _shares.pop(share_token, None)
-        return ok({"deleted": True})
+        try:
+            delete_share(share_token)
+            return ok({"deleted": True})
+        except Exception as exc:
+            logging.error("share_delete: %s", exc)
+            return err(str(exc), 500)
 
     # GET público — sin auth
-    share = _shares.get(share_token)
+    share = load_share(share_token)
     if not share:
         return err("Enlace no encontrado", 404)
     if not share.get("active", True):
