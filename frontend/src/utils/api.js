@@ -1,4 +1,6 @@
 // src/utils/api.js
+// Fetches an MSAL access token then calls the Azure Functions backend.
+
 import { msalInstance, apiRequest } from '../authConfig'
 
 async function getToken() {
@@ -23,33 +25,14 @@ async function apiFetch(path, options = {}) {
 }
 
 export const api = {
-  getProjects:  ()                         => apiFetch('/api/projects'),
-  getWeeks:     (id)                       => apiFetch(`/api/projects/${id}/weeks`),
-  getFiles:     (id, week)                 => apiFetch(`/api/projects/${id}/weeks/${week}/files`),
-
-  // SAS individual — para un archivo
-  getSasUrl:    (blobPath, minutes = 60)   =>
-    apiFetch('/api/sas/generate', {
-      method: 'POST',
-      body: JSON.stringify({ blobPath, expiryMinutes: minutes })
-    }),
-
-  // SAS en lote — para toda una galería de una sola llamada
-  getSasBatch:  (blobPaths, minutes = 60)  =>
-    apiFetch('/api/sas/batch', {
-      method: 'POST',
-      body: JSON.stringify({ blobPaths, expiryMinutes: minutes })
-    }),
-
-  rebuildIndex: ()                         =>
-    apiFetch('/api/index/rebuild', { method: 'POST' }),
-
-  createShare:  (projectId, week, expiryDays) =>
-    apiFetch('/api/share/create', {
-      method: 'POST',
-      body: JSON.stringify({ projectId, week, expiryDays })
-    }),
-  listShares:   ()                         => apiFetch('/api/share/list'),
-  revokeShare:  (token)                    => apiFetch(`/api/share/${token}`, { method: 'DELETE' }),
-  resolveShare: (token)                    => apiFetch(`/api/share/${token}`),
+  getProjects:      ()           => apiFetch('/api/projects'),
+  getWeeks:         (id)         => apiFetch(`/api/projects/${id}/weeks`),
+  getFiles:         (id, week)   => apiFetch(`/api/projects/${id}/weeks/${week}/files`),
+  getSasUrl:        (blobPath, minutes = 60) =>
+    apiFetch('/api/sas/generate', { method: 'POST', body: JSON.stringify({ blobPath, expiryMinutes: minutes }) }),
+  createShare:      (projectId, week, expiryDays) =>
+    apiFetch('/api/share/create', { method: 'POST', body: JSON.stringify({ projectId, week, expiryDays }) }),
+  listShares:       ()           => apiFetch('/api/share/list'),
+  revokeShare:      (token)      => apiFetch(`/api/share/${token}`, { method: 'DELETE' }),
+  resolveShare:     (token)      => apiFetch(`/api/share/${token}`),
 }
