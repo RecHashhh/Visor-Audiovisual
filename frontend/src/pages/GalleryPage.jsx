@@ -1,248 +1,221 @@
-// src/pages/GalleryPage.jsx
-import { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { api } from '../utils/api'
+import { 
+  ArrowLeft, Download, ExternalLink, FileText, 
+  ChevronLeft, ChevronRight, X, Filter, RefreshCw 
+} from 'lucide-react'
 
-const PREFIX_BADGE = {
-  DRN: 'badge-orange', FOT: 'badge-blue', VID: 'badge-red',
-  E360: 'badge-accent', I360: 'badge-dim',
+// Helper de tipos (Movido fuera para que no se recree)
+const prefixOf = (name) => {
+  const p = name.split('_')[0].upperCase ? name.split('_')[0].toUpperCase() : ""
+  return ["DRN", "FOT", "VID", "E360", "I360"].includes(p) ? p : "FILE"
 }
-const IMG_EXTS  = ['jpg','jpeg','png','tiff','tif','webp']
-const VID_EXTS  = ['mp4','mov','avi']
-const RAW_EXTS  = ['dng','cr3','arw','raw','nef']
-
-function extOf(name)   { return name.split('.').pop().toLowerCase() }
-function prefixOf(name){ return name.split('_')[0].toUpperCase() }
-function isImg(name)   { return IMG_EXTS.includes(extOf(name)) }
-function isVid(name)   { return VID_EXTS.includes(extOf(name)) }
-function isRaw(name)   { return RAW_EXTS.includes(extOf(name)) }
 
 export default function GalleryPage() {
   const { id, week } = useParams()
-  const [files,      setFiles]      = useState([])
-  const [sasUrls,    setSasUrls]    = useState({})  // path → sasUrl
-  const [loading,    setLoading]    = useState(true)
-  const [loadingSas, setLoadingSas] = useState(false)
-  const [filter,     setFilter]     = useState('all')
-  const [lightbox,   setLightbox]   = useState(null)
-  const [videoFile,  setVideoFile]  = useState(null)
-  const [shareLink,  setShareLink]  = useState(null)
-  const [sharingDays,setSharingDays]= useState(7)
-  const [showShare,  setShowShare]  = useState(false)
-  const [copied,     setCopied]     = useState(false)
+  const [files, setFiles] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [filter, setFilter] = useState('all')
+  const [lightbox, setLightbox] = useState(null)
+  const [sasUrls, setSasUrls] = useState({})
 
-  // 1. Cargar lista de archivos
+  // 1. LÓGICA DE FILTRADO (Ahora declarada antes de los Effects)
+  const prefixes = useMemo(() => {
+    return [...new Set(files.map(f => prefixOf(f.name)))].filter(Boolean)
+  }, [files])
+
+  const displayFiles = useMemo(() => {
+    return filter === 'all' ? files : files.filter(f => prefixOf(f.name) === filter)
+  }, [files, filter])
+
+  // 2. CARGA DE DATOS
   useEffect(() => {
-    setLoading(true)
-    api.getFiles(id, week)
-      .then(data => {
+    const load = async () => {
+      try {
+        const data = await api.getFiles(id, week)
         setFiles(data)
-        // 2. Cargar SAS de imágenes en batch automáticamente
-        const imgPaths = data.filter(f => isImg(f.name)).map(f => f.path)
-        if (imgPaths.length > 0) {
-          setLoadingSas(true)
-          api.getSasBatch(imgPaths, 120)
-            .then(res => setSasUrls(res.urls || {}))
-            .catch(e => console.warn('SAS batch error:', e))
-            .finally(() => setLoadingSas(false))
+        // Batch SAS para eficiencia
+        const paths = data.map(f => f.path)
+        if (paths.length > 0) {
+          const { urls } = await api.getSasBatch(paths, 120)
+          setSasUrls(urls)
         }
-      })
-      .catch(e => console.error(e))
-      .finally(() => setLoading(false))
+      } catch (err) {
+        console.error(err)
+      } finally {
+        setLoading(false)
+      }
+    }
+    load()
   }, [id, week])
 
-  // SAS individual para videos (bajo demanda)
-  const getVideoSas = useCallback(async (file) => {
-    if (sasUrls[file.path]) return sasUrls[file.path]
-    const res = await api.getSasUrl(file.path, 60)
-    setSasUrls(prev => ({ ...prev, [file.path]: res.sasUrl }))
-    return res.sasUrl
-  }, [sasUrls])
-
-  const openItem = async (file, idx) => {
-    if (isVid(file.name)) {
-      const url = await getVideoSas(file)
-      setVideoFile({ url, name: file.name })
-      return
-    }
-    if (isImg(file.name) && sasUrls[file.path]) {
-      setLightbox({ idx, url: sasUrls[file.path], name: file.name, file })
-    }
-  }
-
-  const navLightbox = (dir) => {
-    const imgs = displayFiles.filter(f => isImg(f.name) && sasUrls[f.path])
-    const cur  = imgs.findIndex(f => f.path === lightbox?.file?.path)
-    const next = imgs[(cur + dir + imgs.length) % imgs.length]
-    if (next) setLightbox({ idx: displayFiles.indexOf(next), url: sasUrls[next.path], name: next.name, file: next })
-  }
-
-  const download = (file) => {
-    const url = sasUrls[file.path]
-    if (!url) return
-    const a = document.createElement('a')
-    a.href = url; a.download = file.name
-    document.body.appendChild(a); a.click(); document.body.removeChild(a)
-  }
-
-  const generateShare = async () => {
-    try {
-      const res = await api.createShare(id, week, sharingDays)
-      setShareLink(`${window.location.origin}/share/${res.token}`)
-    } catch(e) { console.error(e) }
-  }
-
-  const copyLink = () => {
-    if (!shareLink) return
-    navigator.clipboard.writeText(shareLink)
-    setCopied(true); setTimeout(() => setCopied(false), 2000)
-  }
-
+  // 3. MANEJO DE TECLADO (Ahora displayFiles ya existe arriba)
   useEffect(() => {
     const handler = (e) => {
       if (!lightbox) return
       if (e.key === 'ArrowRight') navLightbox(1)
-      if (e.key === 'ArrowLeft')  navLightbox(-1)
-      if (e.key === 'Escape')     setLightbox(null)
+      if (e.key === 'ArrowLeft') navLightbox(-1)
+      if (e.key === 'Escape') setLightbox(null)
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [lightbox, displayFiles])
+  }, [lightbox, displayFiles]) // SEGURO: displayFiles está inicializado
 
-  const prefixes     = [...new Set(files.map(f => prefixOf(f.name)))].filter(Boolean)
-  const displayFiles = filter === 'all' ? files : files.filter(f => prefixOf(f.name) === filter)
-  const imgCount     = files.filter(f => isImg(f.name)).length
-  const vidCount     = files.filter(f => isVid(f.name)).length
-  const rawCount     = files.filter(f => isRaw(f.name)).length
-  const sasLoaded    = Object.keys(sasUrls).length
+  const navLightbox = (dir) => {
+    const idx = displayFiles.findIndex(f => f.path === lightbox.path)
+    const next = displayFiles[(idx + dir + displayFiles.length) % displayFiles.length]
+    setLightbox(next)
+  }
+
+  if (loading) return (
+    <div className="flex flex-col items-center justify-center min-h-[60vh] text-slate-400">
+      <RefreshCw className="w-10 h-10 animate-spin mb-4 text-blue-500" />
+      <p className="animate-pulse">Cargando galería audiovisual...</p>
+    </div>
+  )
 
   return (
-    <>
-      <div className="breadcrumb">
-        <Link to="/">Proyectos</Link><span className="sep">›</span>
-        <Link to={`/project/${id}`}>{id}</Link><span className="sep">›</span>
-        <span className="current">{week}</span>
-      </div>
-
-      <div className="page-header" style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', flexWrap:'wrap', gap:12 }}>
+    <div className="space-y-6 animate-in fade-in duration-500">
+      {/* Header con Breadcrumbs */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/5 pb-6">
         <div>
-          <h1 className="page-title" style={{ fontSize:'1.2rem' }}>
-            {id} <span>/ {week}</span>
+          <div className="flex items-center gap-2 text-sm text-slate-500 mb-2">
+            <Link to="/projects" className="hover:text-blue-400 transition-colors">Proyectos</Link>
+            <span>/</span>
+            <Link to={`/projects/${id}`} className="hover:text-blue-400 transition-colors">{id}</Link>
+            <span>/</span>
+            <span className="text-slate-300">{week}</span>
+          </div>
+          <h1 className="text-3xl font-bold bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent">
+            Registro Audiovisual
           </h1>
-          <p className="page-sub">
-            {files.length} archivos · {imgCount} imágenes · {vidCount} videos · {rawCount} RAW
-            {loadingSas && ` · cargando previews...`}
-            {!loadingSas && imgCount > 0 && ` · ${sasLoaded}/${imgCount} previews listos`}
-          </p>
         </div>
-        <button className="btn btn-ghost btn-sm" onClick={() => setShowShare(s => !s)}>
-          🔗 Compartir semana
-        </button>
+
+        {/* Filtros */}
+        <div className="flex items-center gap-2 bg-slate-900/50 p-1 rounded-xl border border-white/5">
+          <button
+            onClick={() => setFilter('all')}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+              filter === 'all' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            Todos
+          </button>
+          {prefixes.map(p => (
+            <button
+              key={p}
+              onClick={() => setFilter(p)}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                filter === p ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* Panel compartir */}
-      {showShare && (
-        <div style={{ background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'var(--radius-lg)', padding:16, marginBottom:16 }}>
-          <div style={{ fontFamily:'var(--font-display)', fontWeight:700, marginBottom:10, fontSize:'0.9rem' }}>
-            🔗 Generar enlace externo (sin login)
-          </div>
-          <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
-            <span style={{ fontSize:'0.8rem', color:'var(--text-dim)' }}>Expira en:</span>
-            {[7,14,30].map(d => (
-              <button key={d} className={`filter-chip ${sharingDays===d?'active':''}`}
-                onClick={() => setSharingDays(d)}>{d} días</button>
-            ))}
-            <button className="btn btn-primary btn-sm" onClick={generateShare}>Generar link</button>
-          </div>
-          {shareLink && (
-            <div style={{ marginTop:10, display:'flex', gap:8, alignItems:'center', background:'var(--bg3)', padding:'10px 12px', borderRadius:'var(--radius)', flexWrap:'wrap' }}>
-              <code style={{ flex:1, fontSize:'0.75rem', wordBreak:'break-all' }}>{shareLink}</code>
-              <button className="btn btn-primary btn-sm" onClick={copyLink}>
-                {copied ? '✅ Copiado' : 'Copiar'}
-              </button>
+      {/* Grid de Archivos */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+        {displayFiles.map((file) => (
+          <div 
+            key={file.path}
+            className="group relative bg-slate-900 rounded-xl overflow-hidden border border-white/5 hover:border-blue-500/50 transition-all cursor-pointer"
+            onClick={() => setLightbox(file)}
+          >
+            <div className="aspect-video bg-black flex items-center justify-center overflow-hidden">
+              {file.type === 'img' ? (
+                <img 
+                  src={sasUrls[file.path] || ''} 
+                  alt={file.name}
+                  className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
+                />
+              ) : (
+                <div className="flex flex-col items-center gap-2 text-slate-500">
+                  <FileText className="w-8 h-8" />
+                  <span className="text-[10px] font-bold px-2 py-0.5 bg-white/10 rounded uppercase">
+                    {file.type}
+                  </span>
+                </div>
+              )}
             </div>
-          )}
-        </div>
-      )}
+            
+            <div className="p-3">
+              <p className="text-xs text-slate-300 truncate font-medium">{file.name}</p>
+              <p className="text-[10px] text-slate-500 mt-1 uppercase tracking-wider">{file.prefix}</p>
+            </div>
 
-      {loading && <div className="loading"><div className="spinner"/><span>Cargando archivos...</span></div>}
-
-      {!loading && (
-        <>
-          <div className="gallery-toolbar">
-            <button className={`filter-chip ${filter==='all'?'active':''}`} onClick={() => setFilter('all')}>
-              Todos ({files.length})
-            </button>
-            {prefixes.map(p => (
-              <button key={p} className={`filter-chip ${filter===p?'active':''}`} onClick={() => setFilter(p)}>
-                {p} ({files.filter(f => prefixOf(f.name)===p).length})
-              </button>
-            ))}
+            <div className="absolute inset-0 bg-blue-600/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+              <ExternalLink className="w-6 h-6 text-white drop-shadow-md" />
+            </div>
           </div>
-
-          <div className="gallery-grid">
-            {displayFiles.map((file, idx) => (
-              <GalleryItem
-                key={file.name}
-                file={file}
-                sasUrl={sasUrls[file.path]}
-                onClick={() => openItem(file, idx)}
-              />
-            ))}
-          </div>
-        </>
-      )}
+        ))}
+      </div>
 
       {/* Lightbox */}
       {lightbox && (
-        <div className="lightbox-overlay" onClick={e => e.target===e.currentTarget && setLightbox(null)}>
-          <button className="lightbox-close" onClick={() => setLightbox(null)}>✕</button>
-          <button className="lightbox-nav prev" onClick={() => navLightbox(-1)}>‹</button>
-          <button className="lightbox-nav next" onClick={() => navLightbox(1)}>›</button>
-          <img className="lightbox-img" src={lightbox.url} alt={lightbox.name} />
-          <div className="lightbox-toolbar">
-            <span className="lightbox-name">{lightbox.name}</span>
-            <button className="btn btn-ghost btn-sm" onClick={() => download(lightbox.file)}>⬇ Descargar</button>
+        <div className="fixed inset-0 z-50 bg-black/95 backdrop-blur-sm flex flex-col animate-in fade-in zoom-in duration-300">
+          <div className="flex items-center justify-between p-4 text-white">
+            <div className="flex flex-col">
+              <span className="text-sm font-medium">{lightbox.name}</span>
+              <span className="text-[10px] text-slate-500 uppercase">{lightbox.path}</span>
+            </div>
+            <div className="flex items-center gap-4">
+              <a 
+                href={sasUrls[lightbox.path]} 
+                download 
+                className="p-2 hover:bg-white/10 rounded-full transition-colors"
+                onClick={e => e.stopPropagation()}
+              >
+                <Download className="w-6 h-6" />
+              </a>
+              <button onClick={() => setLightbox(null)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+          </div>
+
+          <div className="flex-1 relative flex items-center justify-center p-4">
+            <button 
+              onClick={(e) => { e.stopPropagation(); navLightbox(-1); }}
+              className="absolute left-4 p-4 hover:bg-white/5 rounded-full transition-colors text-white/50 hover:text-white"
+            >
+              <ChevronLeft className="w-10 h-10" />
+            </button>
+
+            <div className="max-w-5xl max-h-full flex items-center justify-center">
+              {lightbox.type === 'img' ? (
+                <img src={sasUrls[lightbox.path]} alt="" className="max-w-full max-h-[80vh] object-contain shadow-2xl" />
+              ) : lightbox.type === 'vid' ? (
+                <video src={sasUrls[lightbox.path]} controls autoPlay className="max-w-full max-h-[80vh]" />
+              ) : (
+                <div className="bg-slate-900 p-12 rounded-2xl border border-white/10 flex flex-col items-center gap-6">
+                  <FileText className="w-20 h-20 text-blue-500" />
+                  <div className="text-center">
+                    <p className="text-xl text-white font-bold mb-2">Vista previa no disponible</p>
+                    <p className="text-slate-400">Este tipo de archivo ({lightbox.type}) debe ser descargado.</p>
+                  </div>
+                  <a 
+                    href={sasUrls[lightbox.path]} 
+                    download 
+                    className="bg-blue-600 hover:bg-blue-500 px-8 py-3 rounded-xl font-bold transition-all flex items-center gap-2 text-white"
+                  >
+                    <Download className="w-5 h-5" /> Descargar Archivo
+                  </a>
+                </div>
+              )}
+            </div>
+
+            <button 
+              onClick={(e) => { e.stopPropagation(); navLightbox(1); }}
+              className="absolute right-4 p-4 hover:bg-white/5 rounded-full transition-colors text-white/50 hover:text-white"
+            >
+              <ChevronRight className="w-10 h-10" />
+            </button>
           </div>
         </div>
       )}
-
-      {/* Video */}
-      {videoFile && (
-        <div className="lightbox-overlay" onClick={e => e.target===e.currentTarget && setVideoFile(null)}>
-          <button className="lightbox-close" onClick={() => setVideoFile(null)}>✕</button>
-          <div className="video-container" style={{ maxWidth:'90vw', width:960 }}>
-            <video controls autoPlay src={videoFile.url}>Tu navegador no soporta video.</video>
-          </div>
-          <div className="lightbox-toolbar">
-            <span className="lightbox-name">{videoFile.name}</span>
-          </div>
-        </div>
-      )}
-    </>
-  )
-}
-
-function GalleryItem({ file, sasUrl, onClick }) {
-  const prefix    = prefixOf(file.name)
-  const typeColor = PREFIX_BADGE[prefix] || 'badge-dim'
-  const canPreview= isImg(file.name)
-  const icon      = isVid(file.name) ? '▶' : isRaw(file.name) ? 'RAW' : file.name.endsWith('.insv') ? '360°' : '📄'
-
-  return (
-    <div className="gallery-item" onClick={onClick}
-      style={{ cursor: canPreview || isVid(file.name) ? 'pointer' : 'default' }}>
-      {canPreview && sasUrl ? (
-        <img src={sasUrl} alt={file.name} loading="lazy" />
-      ) : (
-        <div className="file-icon">
-          <div className="file-icon-sym">{icon}</div>
-          <div className="file-icon-name">{file.name}</div>
-          {canPreview && !sasUrl && <div className="spinner" style={{ width:16, height:16 }}/>}
-        </div>
-      )}
-      <div className={`gallery-item-type badge ${typeColor}`}>{prefix}</div>
-      <div className="gallery-item-label">{file.name}</div>
     </div>
   )
 }
