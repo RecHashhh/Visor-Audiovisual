@@ -8,8 +8,11 @@ import json
 import os
 import logging
 import uuid
+import io
+from threading import Lock
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any
+from PIL import Image, ImageOps
 
 from azure.storage.blob import (
     BlobServiceClient,
@@ -24,9 +27,14 @@ CONN_STR     = os.environ.get("AZURE_STORAGE_CONNECTION_STRING", "")
 ACCOUNT_NAME = os.environ.get("AZURE_STORAGE_ACCOUNT", "ripconaudiovisual")
 ACCOUNT_KEY  = os.environ.get("AZURE_STORAGE_KEY", "")
 CONTAINER    = os.environ.get("BLOB_CONTAINER", "audiovisual")
+CACHE_TTL_SECONDS = int(os.environ.get("CACHE_TTL_SECONDS", "45"))
 
 # Share store en memoria
 _shares: Dict[str, Dict] = {}
+
+# Cache simple en memoria para acelerar lecturas repetidas.
+_cache: Dict[str, Dict[str, Any]] = {}
+_cache_lock = Lock()
 
 # ── HELPERS ────────────────────────────────────────────────────────────────
 
@@ -54,6 +62,33 @@ def err(msg: str, status: int = 400) -> func.HttpResponse:
 
 def options_ok() -> func.HttpResponse:
     return func.HttpResponse("", status_code=204, headers=cors_headers())
+
+def binary_headers(content_type: str = "application/octet-stream") -> Dict[str, str]:
+    return {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+        "Access-Control-Allow-Headers": "Authorization, Content-Type",
+        "Content-Type": content_type,
+        "Cache-Control": "public, max-age=600",
+    }
+
+def cache_get(key: str):
+    now = datetime.now(timezone.utc).timestamp()
+    with _cache_lock:
+        entry = _cache.get(key)
+        if not entry:
+            return None
+        if entry["expires_at"] <= now:
+            _cache.pop(key, None)
+            return None
+        return entry["value"]
+
+def cache_set(key: str, value: Any, ttl_seconds: int = CACHE_TTL_SECONDS) -> None:
+    if ttl_seconds <= 0:
+        return
+    expires_at = datetime.now(timezone.utc).timestamp() + ttl_seconds
+    with _cache_lock:
+        _cache[key] = {"expires_at": expires_at, "value": value}
 
 def is_authenticated(req: func.HttpRequest) -> bool:
     """
@@ -104,6 +139,71 @@ def make_sas_url(blob_path: str, expiry_minutes: int = 60) -> str:
     return f"https://{ACCOUNT_NAME}.blob.core.windows.net/{CONTAINER}/{blob_path}?{sas}"
 
 
+def build_thumbnail_bytes(raw_bytes: bytes, max_width: int = 480, quality: int = 72) -> bytes:
+    with Image.open(io.BytesIO(raw_bytes)) as img:
+        # Apply EXIF orientation so thumbnails match camera orientation.
+        img = ImageOps.exif_transpose(img)
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        elif img.mode == "L":
+            img = img.convert("RGB")
+
+        w, h = img.size
+        if w > max_width:
+            new_h = int((h * max_width) / w)
+            img = img.resize((max_width, max(1, new_h)), Image.Resampling.LANCZOS)
+
+        out = io.BytesIO()
+        img.save(out, format="JPEG", quality=quality, optimize=True, progressive=True)
+        return out.getvalue()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GET /api/thumb
+# ══════════════════════════════════════════════════════════════════════════════
+@app.route(route="thumb", methods=["GET", "OPTIONS"])
+def thumb(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return func.HttpResponse("", status_code=204, headers=binary_headers("application/json"))
+    if not is_authenticated(req):
+        return err("No autorizado", 401)
+
+    blob_path = (req.params.get("blobPath") or "").strip()
+    ext = ext_of(blob_path)
+    if not blob_path:
+        return err("blobPath es requerido")
+    if ext not in ("jpg", "jpeg", "png", "webp", "tif", "tiff"):
+        return err("thumb solo disponible para imagenes", 400)
+
+    try:
+        max_width = int(req.params.get("w", "480"))
+    except Exception:
+        max_width = 480
+    try:
+        quality = int(req.params.get("q", "72"))
+    except Exception:
+        quality = 72
+
+    max_width = max(160, min(max_width, 1280))
+    quality = max(40, min(quality, 90))
+
+    cache_key = f"thumb:{blob_path}:{max_width}:{quality}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return func.HttpResponse(body=cached, status_code=200, headers=binary_headers("image/jpeg"))
+
+    try:
+        svc = get_blob_service()
+        bc = svc.get_blob_client(container=CONTAINER, blob=blob_path)
+        raw = bc.download_blob().readall()
+        thumb_bytes = build_thumbnail_bytes(raw, max_width=max_width, quality=quality)
+        cache_set(cache_key, thumb_bytes, ttl_seconds=300)
+        return func.HttpResponse(body=thumb_bytes, status_code=200, headers=binary_headers("image/jpeg"))
+    except Exception as exc:
+        logging.error("thumb: %s", exc)
+        return err(str(exc), 500)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # GET /api/projects
 # ══════════════════════════════════════════════════════════════════════════════
@@ -113,6 +213,10 @@ def get_projects(req: func.HttpRequest) -> func.HttpResponse:
         return options_ok()
     if not is_authenticated(req):
         return err("No autorizado", 401)
+
+    cached = cache_get("projects")
+    if cached is not None:
+        return ok(cached)
 
     try:
         svc = get_blob_service()
@@ -154,6 +258,7 @@ def get_projects(req: func.HttpRequest) -> func.HttpResponse:
                 "status":       proj["status"],
                 "lastModified": proj["lastModified"].isoformat() if proj["lastModified"] else None,
             })
+        cache_set("projects", result)
         return ok(result)
 
     except Exception as exc:
@@ -172,6 +277,11 @@ def get_weeks(req: func.HttpRequest) -> func.HttpResponse:
         return err("No autorizado", 401)
 
     project_id = req.route_params.get("project_id", "")
+    cache_key = f"weeks:{project_id}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return ok(cached)
+
     try:
         svc = get_blob_service()
         cc  = svc.get_container_client(CONTAINER)
@@ -194,6 +304,7 @@ def get_weeks(req: func.HttpRequest) -> func.HttpResponse:
             {"week": k, "count": v["count"], "types": sorted(v["types"])}
             for k, v in sorted(week_map.items())
         ]
+        cache_set(cache_key, weeks)
         return ok(weeks)
 
     except Exception as exc:
@@ -213,6 +324,11 @@ def get_files(req: func.HttpRequest) -> func.HttpResponse:
 
     project_id = req.route_params.get("project_id", "")
     week       = req.route_params.get("week", "")
+    cache_key = f"files:{project_id}:{week}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return ok(cached)
+
     try:
         svc = get_blob_service()
         cc  = svc.get_container_client(CONTAINER)
@@ -232,6 +348,7 @@ def get_files(req: func.HttpRequest) -> func.HttpResponse:
             })
 
         files.sort(key=lambda f: f["name"])
+        cache_set(cache_key, files)
         return ok(files)
 
     except Exception as exc:

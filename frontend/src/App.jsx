@@ -1,6 +1,7 @@
 // src/App.jsx
 import { useIsAuthenticated, useMsal } from '@azure/msal-react'
 import { InteractionStatus } from '@azure/msal-browser'
+import { useEffect } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import LoginPage    from './pages/LoginPage'
 import ProjectsPage from './pages/ProjectsPage'
@@ -31,6 +32,18 @@ function RequireAuth({ children }) {
 export default function App() {
   const isAuth = useIsAuthenticated()
   const { inProgress } = useMsal()
+
+  useEffect(() => {
+    if (!isAuth || inProgress !== InteractionStatus.None) return
+
+    const ping = () => {
+      fetch('/api/health', { cache: 'no-store' }).catch(() => {})
+    }
+
+    ping()
+    const id = setInterval(ping, 2 * 60 * 1000)
+    return () => clearInterval(id)
+  }, [isAuth, inProgress])
 
   return (
     <Routes>
