@@ -23,7 +23,7 @@ app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 CONN_STR     = os.environ.get("AZURE_STORAGE_CONNECTION_STRING", "")
 ACCOUNT_NAME = os.environ.get("AZURE_STORAGE_ACCOUNT", "ripconaudiovisual")
 ACCOUNT_KEY  = os.environ.get("AZURE_STORAGE_KEY", "")
-CONTAINER    = os.environ.get("CONTAINER_NAME", "audiovisual")
+CONTAINER    = os.environ.get("BLOB_CONTAINER", "audiovisual")
 
 # Share store en memoria
 _shares: Dict[str, Dict] = {}
@@ -383,4 +383,3 @@ def health(req: func.HttpRequest) -> func.HttpResponse:
         "container": CONTAINER,
         "account":   ACCOUNT_NAME,
     })
-
