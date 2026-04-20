@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo } from 'react'
+// src/pages/GalleryPage.jsx
+import { useState, useEffect, useCallback } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { api } from '../utils/api'
 
@@ -8,145 +9,202 @@ const PREFIX_BADGE = {
 }
 const IMG_EXTS  = ['jpg','jpeg','png','tiff','tif','webp']
 const VID_EXTS  = ['mp4','mov','avi']
+const RAW_EXTS  = ['dng','cr3','arw','raw','nef']
+const I360_EXTS = ['insv']
 
-function extOf(name)   { return name.split('.').pop().toLowerCase() }
-function prefixOf(name){ return name.split('_')[0].toUpperCase() }
-function isImg(name)   { return IMG_EXTS.includes(extOf(name)) }
-function isVid(name)   { return VID_EXTS.includes(extOf(name)) }
+function extOf(name) { return name.split('.').pop().toLowerCase() }
+function prefixOf(name) { return name.split('_')[0].toUpperCase() }
+function isImg(name)  { return IMG_EXTS.includes(extOf(name)) }
+function isVid(name)  { return VID_EXTS.includes(extOf(name)) }
+function isRaw(name)  { return RAW_EXTS.includes(extOf(name)) }
+function isI360(name) { return I360_EXTS.includes(extOf(name)) }
 
 export default function GalleryPage() {
   const { id, week } = useParams()
   const [files, setFiles] = useState([])
-  const [sasUrls, setSasUrls] = useState({})
+  const [sasCache, setSasCache] = useState({})
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('all')
-  const [lightbox, setLightbox] = useState(null)
+  const [lightbox, setLightbox] = useState(null)  // { idx: number, url: string, name: string }
+  const [videoFile, setVideoFile] = useState(null)
+  const [shareLink, setShareLink] = useState(null)
+  const [sharingDays, setSharingDays] = useState(7)
+  const [showSharePanel, setShowSharePanel] = useState(false)
+  const [copied, setCopied] = useState(false)
 
-  // --- CORRECCIÓN DE INICIALIZACIÓN (Mover esto arriba) ---
-  const prefixes = useMemo(() => {
-    return [...new Set(files.map(f => prefixOf(f.name)))].filter(Boolean)
-  }, [files])
-
-  const displayFiles = useMemo(() => {
-    return filter === 'all' ? files : files.filter(f => prefixOf(f.name) === filter)
-  }, [files, filter])
-
-  // --- CARGA DE DATOS (Mantiene tu lógica de SAS batch) ---
   useEffect(() => {
-    const load = async () => {
-      try {
-        const data = await api.getFiles(id, week)
-        setFiles(data)
-        const paths = data.map(f => f.path)
-        if (paths.length > 0) {
-          const { urls } = await api.getSasBatch(paths, 120)
-          setSasUrls(urls)
-        }
-      } catch (err) {
-        console.error("Error cargando archivos:", err)
-      } finally {
-        setLoading(false)
-      }
-    }
-    load()
+    api.getFiles(id, week)
+      .then(setFiles)
+      .finally(() => setLoading(false))
   }, [id, week])
 
-  // --- EVENTOS DE TECLADO ---
+  const getSas = useCallback(async (blobPath, minutes = 60) => {
+    if (sasCache[blobPath]) return sasCache[blobPath]
+    const res = await api.getSasUrl(blobPath, minutes)
+    setSasCache(c => ({ ...c, [blobPath]: res.sasUrl }))
+    return res.sasUrl
+  }, [sasCache])
+
+  const openItem = async (file, idx) => {
+    if (isVid(file.name)) {
+      const url = await getSas(file.path)
+      setVideoFile({ url, name: file.name })
+      return
+    }
+    if (isImg(file.name)) {
+      const url = await getSas(file.path)
+      setLightbox({ idx, url, name: file.name })
+    }
+  }
+
+  const navLightbox = async (dir) => {
+    const imgs = displayFiles.filter(f => isImg(f.name))
+    const curIdx = imgs.findIndex(f => f.name === lightbox?.name)
+    const next = imgs[(curIdx + dir + imgs.length) % imgs.length]
+    if (!next) return
+    const url = await getSas(next.path)
+    const realIdx = displayFiles.indexOf(next)
+    setLightbox({ idx: realIdx, url, name: next.name })
+  }
+
+  const download = async (file) => {
+    const url = await getSas(file.path, 15)
+    const a = document.createElement('a'); a.href = url; a.download = file.name
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+  }
+
+  const generateShare = async () => {
+    try {
+      const res = await api.createShare(id, week, sharingDays)
+      setShareLink(`${window.location.origin}/share/${res.token}`)
+    } catch {}
+  }
+
+  const copyLink = () => {
+    if (!shareLink) return
+    navigator.clipboard.writeText(shareLink)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  const prefixes = [...new Set(files.map(f => prefixOf(f.name)))].filter(Boolean)
+  const displayFiles = filter === 'all' ? files : files.filter(f => prefixOf(f.name) === filter)
+
+  const counts = {
+    img: files.filter(f => isImg(f.name)).length,
+    vid: files.filter(f => isVid(f.name)).length,
+    raw: files.filter(f => isRaw(f.name)).length,
+  }
+
+  // Keyboard nav for lightbox
   useEffect(() => {
     const handler = (e) => {
       if (!lightbox) return
       if (e.key === 'ArrowRight') navLightbox(1)
-      if (e.key === 'ArrowLeft') navLightbox(-1)
-      if (e.key === 'Escape') setLightbox(null)
+      if (e.key === 'ArrowLeft')  navLightbox(-1)
+      if (e.key === 'Escape')     setLightbox(null)
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [lightbox, displayFiles])
-
-  const navLightbox = (dir) => {
-    const idx = displayFiles.findIndex(f => f.path === lightbox.path)
-    const next = displayFiles[(idx + dir + displayFiles.length) % displayFiles.length]
-    setLightbox(next)
-  }
-
-  const handleShare = async () => {
-    try {
-      const res = await api.createShare(id, week, 7)
-      const url = `${window.location.origin}/share/${res.token}`
-      await navigator.clipboard.writeText(url)
-      alert("Link de acceso (7 días) copiado al portapapeles")
-    } catch (err) {
-      alert("Error al crear link: " + err.message)
-    }
-  }
-
-  if (loading) return <div className="loading"><div className="spinner" /><span>Cargando galería...</span></div>
+  }, [lightbox])
 
   return (
     <>
-      <div className="header-actions">
-        <div className="breadcrumb">
-          <Link to="/">Proyectos</Link> / <Link to={`/project/${id}`}>{id}</Link> / {week}
-        </div>
-        <div className="btn-group">
-          <button className="btn btn-outline" onClick={handleShare}>
-            <span>🔗 Compartir Semana</span>
-          </button>
-        </div>
+      <div className="breadcrumb">
+        <Link to="/">Proyectos</Link>
+        <span className="sep">›</span>
+        <Link to={`/project/${id}`}>{id}</Link>
+        <span className="sep">›</span>
+        <span className="current">{week}</span>
       </div>
 
-      <div className="stats-bar">
-        <div 
-          className={`badge ${filter === 'all' ? 'badge-blue' : 'badge-dim'}`}
-          style={{ cursor: 'pointer' }}
-          onClick={() => setFilter('all')}
-        >
-          TODOS ({files.length})
+      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
+        <div>
+          <h1 className="page-title" style={{ fontSize: '1.2rem' }}>
+            {id} <span>/ {week}</span>
+          </h1>
+          <p className="page-sub">
+            {files.length} archivos · {counts.img} imágenes · {counts.vid} videos · {counts.raw} RAW
+          </p>
         </div>
-        {prefixes.map(p => (
-          <div 
-            key={p}
-            className={`badge ${filter === p ? (PREFIX_BADGE[p] || 'badge-blue') : 'badge-dim'}`}
-            style={{ cursor: 'pointer' }}
-            onClick={() => setFilter(p)}
-          >
-            {p} ({files.filter(f => prefixOf(f.name) === p).length})
+        <button className="btn btn-ghost btn-sm" onClick={() => setShowSharePanel(s => !s)}>
+          🔗 Compartir semana
+        </button>
+      </div>
+
+      {/* Share panel */}
+      {showSharePanel && (
+        <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', padding: '16px', marginBottom: '16px' }}>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, marginBottom: '10px', fontSize: '0.9rem' }}>
+            🔗 Generar enlace externo (sin login)
           </div>
-        ))}
-      </div>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>Expira en:</span>
+            {[7, 14, 30].map(d => (
+              <button key={d} className={`filter-chip ${sharingDays === d ? 'active' : ''}`}
+                onClick={() => setSharingDays(d)}>{d} días</button>
+            ))}
+            <button className="btn btn-primary btn-sm" onClick={generateShare}>Generar link</button>
+          </div>
+          {shareLink && (
+            <div style={{ marginTop: '10px', display: 'flex', gap: '8px', alignItems: 'center', background: 'var(--bg3)', padding: '10px 12px', borderRadius: 'var(--radius)', flexWrap: 'wrap' }}>
+              <code style={{ flex: 1, fontSize: '0.75rem', wordBreak: 'break-all' }}>{shareLink}</code>
+              <button className="btn btn-primary btn-sm" onClick={copyLink}>
+                {copied ? '✅ Copiado' : 'Copiar'}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
-      <div className="gallery-grid">
-        {displayFiles.map((file) => (
-          <GalleryItem 
-            key={file.path} 
-            file={file} 
-            sasUrl={sasUrls[file.path]} 
-            onClick={() => (isImg(file.name) || isVid(file.name)) && setLightbox(file)} 
-          />
-        ))}
-      </div>
+      {loading && <div className="loading"><div className="spinner"/></div>}
 
+      {!loading && (
+        <>
+          {/* Filters */}
+          <div className="gallery-toolbar">
+            <button className={`filter-chip ${filter === 'all' ? 'active' : ''}`} onClick={() => setFilter('all')}>
+              Todos ({files.length})
+            </button>
+            {prefixes.map(p => (
+              <button key={p} className={`filter-chip ${filter === p ? 'active' : ''}`} onClick={() => setFilter(p)}>
+                {p} ({files.filter(f => prefixOf(f.name) === p).length})
+              </button>
+            ))}
+          </div>
+
+          {/* Gallery grid */}
+          <div className="gallery-grid">
+            {displayFiles.map((file, idx) => (
+              <GalleryItem key={file.name} file={file} onClick={() => openItem(file, idx)} />
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* Lightbox */}
       {lightbox && (
-        <div className="lightbox-overlay" onClick={e => e.target === e.currentTarget && setLightbox(null)}>
+        <div className="lightbox-overlay" onClick={e => e.target.className === 'lightbox-overlay' && setLightbox(null)}>
           <button className="lightbox-close" onClick={() => setLightbox(null)}>✕</button>
-          
-          <div className="lightbox-content">
-            {isImg(lightbox.name) ? (
-              <img src={sasUrls[lightbox.path]} alt="" />
-            ) : (
-              <video src={sasUrls[lightbox.path]} controls autoPlay />
-            )}
-          </div>
-
+          <button className="lightbox-nav prev" onClick={() => navLightbox(-1)}>‹</button>
+          <button className="lightbox-nav next" onClick={() => navLightbox(1)}>›</button>
+          <img className="lightbox-img" src={lightbox.url} alt={lightbox.name} />
           <div className="lightbox-toolbar">
-            <div className="lightbox-info">
-              <span className="lightbox-name">{lightbox.name}</span>
-            </div>
-            <div className="lightbox-btns">
-              <a href={sasUrls[lightbox.path]} download={lightbox.name} className="btn-icon" title="Descargar">
-                📥
-              </a>
-            </div>
+            <span className="lightbox-name">{lightbox.name}</span>
+            <button className="btn btn-ghost btn-sm" onClick={() => download(displayFiles[lightbox.idx])}>⬇ Descargar</button>
+          </div>
+        </div>
+      )}
+
+      {/* Video player */}
+      {videoFile && (
+        <div className="lightbox-overlay" onClick={e => e.target === e.currentTarget && setVideoFile(null)}>
+          <button className="lightbox-close" onClick={() => setVideoFile(null)}>✕</button>
+          <div className="video-container" style={{ maxWidth: '90vw', width: '960px' }}>
+            <video controls autoPlay src={videoFile.url}>Tu navegador no soporta video.</video>
+          </div>
+          <div className="lightbox-toolbar">
+            <span className="lightbox-name">{videoFile.name}</span>
           </div>
         </div>
       )}
@@ -154,25 +212,38 @@ export default function GalleryPage() {
   )
 }
 
-function GalleryItem({ file, sasUrl, onClick }) {
+function GalleryItem({ file, onClick }) {
+  const [thumb, setThumb] = useState(null)
+  const [loading, setLoading] = useState(false)
   const prefix = prefixOf(file.name)
+  const ext = extOf(file.name)
+
+  const load = async () => {
+    if (thumb || loading || !isImg(file.name)) return
+    setLoading(true)
+    try {
+      const res = await api.getSasUrl(file.path, 60)
+      setThumb(res.sasUrl)
+    } catch {}
+    setLoading(false)
+  }
+
+  const icon = isVid(file.name) ? '▶' : isRaw(file.name) ? 'RAW' : isI360(file.name) ? '360°' : '📄'
   const typeColor = PREFIX_BADGE[prefix] || 'badge-dim'
-  const canPreview = isImg(file.name)
-  const icon = isVid(file.name) ? '▶' : '📄'
 
   return (
-    <div className="gallery-item" onClick={onClick}>
-      <div className="file-icon">
-        {canPreview && sasUrl ? (
-          <img src={sasUrl} alt={file.name} loading="lazy" />
-        ) : (
+    <div className="gallery-item" onClick={onClick} onMouseEnter={load}>
+      {thumb ? (
+        <img src={thumb} alt={file.name} loading="lazy" />
+      ) : (
+        <div className="file-icon">
           <div className="file-icon-sym">{icon}</div>
-        )}
-      </div>
-      <div className="file-info-mini">
-        <span className={`badge-dot ${typeColor}`}></span>
-        <span className="file-name-text">{file.name}</span>
-      </div>
+          <div className="file-icon-name">{file.name}</div>
+          {loading && <div className="spinner" style={{ width: 16, height: 16 }} />}
+        </div>
+      )}
+      <div className={`gallery-item-type badge ${typeColor}`}>{prefix}</div>
+      <div className="gallery-item-label">{file.name}</div>
     </div>
   )
 }
