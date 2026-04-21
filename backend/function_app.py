@@ -30,6 +30,10 @@ ACCOUNT_KEY  = os.environ.get("AZURE_STORAGE_KEY", "")
 CONTAINER    = os.environ.get("BLOB_CONTAINER", "audiovisual")
 CACHE_TTL_SECONDS = int(os.environ.get("CACHE_TTL_SECONDS", "45"))
 SHARES_PREFIX = os.environ.get("SHARES_PREFIX", "_shares")
+STATUS_UPLOAD_WINDOW_HOURS = int(os.environ.get("STATUS_UPLOAD_WINDOW_HOURS", "48"))
+INDEX_PREFIX = os.environ.get("INDEX_PREFIX", "_index")
+INDEX_ENABLED = os.environ.get("INDEX_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
+INDEX_REFRESH_CRON = os.environ.get("INDEX_REFRESH_CRON", "0 0 4 * * *")
 
 # Cache simple en memoria para acelerar lecturas repetidas.
 _cache: Dict[str, Dict[str, Any]] = {}
@@ -137,6 +141,19 @@ def make_sas_url(blob_path: str, expiry_minutes: int = 60) -> str:
     )
     return f"https://{ACCOUNT_NAME}.blob.core.windows.net/{CONTAINER}/{blob_path}?{sas}"
 
+def derive_project_status(file_count: int, weeks_count: int, last_modified: Optional[datetime]) -> Dict[str, str]:
+    if file_count <= 0 or weeks_count <= 0:
+        return {"status": "pendiente", "statusReason": "Sin archivos o semanas registradas"}
+
+    if last_modified:
+        now_utc = datetime.now(timezone.utc)
+        lm_utc = last_modified if last_modified.tzinfo else last_modified.replace(tzinfo=timezone.utc)
+        age_hours = (now_utc - lm_utc).total_seconds() / 3600
+        if age_hours <= STATUS_UPLOAD_WINDOW_HOURS:
+            return {"status": "subiendo", "statusReason": f"Actividad reciente ({age_hours:.1f}h)"}
+
+    return {"status": "completo", "statusReason": "Carga estable"}
+
 def share_blob_name(token: str) -> str:
     return f"{SHARES_PREFIX.strip('/')}/{token}.json"
 
@@ -177,6 +194,159 @@ def list_shares() -> list:
         except Exception:
             continue
     return result
+
+def index_projects_blob_name() -> str:
+    return f"{INDEX_PREFIX.strip('/')}/projects.json"
+
+def index_weeks_blob_name(project_id: str) -> str:
+    return f"{INDEX_PREFIX.strip('/')}/weeks/{project_id}.json"
+
+def index_files_blob_name(project_id: str, week: str) -> str:
+    return f"{INDEX_PREFIX.strip('/')}/files/{project_id}/{week}.json"
+
+def should_skip_for_content_index(blob_name: str) -> bool:
+    shares_prefix = f"{SHARES_PREFIX.strip('/')}/"
+    index_prefix = f"{INDEX_PREFIX.strip('/')}/"
+    return blob_name.startswith(shares_prefix) or blob_name.startswith(index_prefix)
+
+def load_json_blob(blob_name: str) -> Optional[Any]:
+    svc = get_blob_service()
+    bc = svc.get_blob_client(container=CONTAINER, blob=blob_name)
+    try:
+        raw = bc.download_blob().readall()
+        return json.loads(raw.decode("utf-8"))
+    except ResourceNotFoundError:
+        return None
+
+def save_json_blob(blob_name: str, payload: Any) -> None:
+    svc = get_blob_service()
+    bc = svc.get_blob_client(container=CONTAINER, blob=blob_name)
+    bc.upload_blob(
+        json.dumps(payload, ensure_ascii=False, default=str),
+        overwrite=True,
+        content_type="application/json"
+    )
+
+def clear_index_related_cache() -> None:
+    with _cache_lock:
+        keys = list(_cache.keys())
+        for key in keys:
+            if key == "projects" or key.startswith("weeks:") or key.startswith("files:"):
+                _cache.pop(key, None)
+
+def build_index_payloads() -> Dict[str, Any]:
+    svc = get_blob_service()
+    cc  = svc.get_container_client(CONTAINER)
+
+    project_map: Dict[str, Dict[str, Any]] = {}
+    week_map_by_project: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    files_map_by_project_week: Dict[str, list] = {}
+
+    for blob in cc.list_blobs():
+        if should_skip_for_content_index(blob.name):
+            continue
+
+        parts = blob.name.split("/")
+        if len(parts) < 3 or not parts[2]:
+            continue
+
+        project_id = parts[0]
+        week = parts[1]
+        fname = parts[2]
+
+        if project_id not in project_map:
+            slug = " ".join(project_id.split("_")[1:]).upper().replace("-", " ")
+            project_map[project_id] = {
+                "code": project_id,
+                "name": slug,
+                "weeks": set(),
+                "types": set(),
+                "lastModified": None,
+                "fileCount": 0,
+            }
+
+        proj = project_map[project_id]
+        proj["weeks"].add(week)
+        proj["fileCount"] += 1
+        pfx = prefix_of(fname)
+        if pfx != "FILE":
+            proj["types"].add(pfx)
+        lm = blob.last_modified
+        if lm and (proj["lastModified"] is None or lm > proj["lastModified"]):
+            proj["lastModified"] = lm
+
+        if project_id not in week_map_by_project:
+            week_map_by_project[project_id] = {}
+        if week not in week_map_by_project[project_id]:
+            week_map_by_project[project_id][week] = {"week": week, "count": 0, "types": set()}
+        week_map_by_project[project_id][week]["count"] += 1
+        if pfx != "FILE":
+            week_map_by_project[project_id][week]["types"].add(pfx)
+
+        file_key = f"{project_id}:{week}"
+        if file_key not in files_map_by_project_week:
+            files_map_by_project_week[file_key] = []
+        files_map_by_project_week[file_key].append({
+            "name": fname,
+            "path": blob.name,
+            "size": blob.size,
+            "type": type_of(fname),
+            "prefix": prefix_of(fname),
+            "lastModified": blob.last_modified.isoformat() if blob.last_modified else None,
+        })
+
+    projects = []
+    for proj in sorted(project_map.values(), key=lambda x: x["code"]):
+        status_info = derive_project_status(
+            file_count=proj["fileCount"],
+            weeks_count=len(proj["weeks"]),
+            last_modified=proj["lastModified"],
+        )
+        projects.append({
+            "code": proj["code"],
+            "name": proj["name"],
+            "weeks": len(proj["weeks"]),
+            "types": "+".join(sorted(proj["types"])),
+            "status": status_info["status"],
+            "statusReason": status_info["statusReason"],
+            "lastModified": proj["lastModified"].isoformat() if proj["lastModified"] else None,
+        })
+
+    weeks_by_project: Dict[str, list] = {}
+    for project_id, week_map in week_map_by_project.items():
+        weeks = [
+            {"week": k, "count": v["count"], "types": sorted(v["types"])}
+            for k, v in sorted(week_map.items())
+        ]
+        weeks_by_project[project_id] = weeks
+
+    for key in files_map_by_project_week:
+        files_map_by_project_week[key].sort(key=lambda f: f["name"])
+
+    return {
+        "projects": projects,
+        "weeksByProject": weeks_by_project,
+        "filesByProjectWeek": files_map_by_project_week,
+    }
+
+def refresh_content_indexes() -> Dict[str, int]:
+    payloads = build_index_payloads()
+    save_json_blob(index_projects_blob_name(), payloads["projects"])
+
+    for project_id, weeks in payloads["weeksByProject"].items():
+        save_json_blob(index_weeks_blob_name(project_id), weeks)
+
+    for key, files in payloads["filesByProjectWeek"].items():
+        project_id, week = key.split(":", 1)
+        save_json_blob(index_files_blob_name(project_id, week), files)
+
+    clear_index_related_cache()
+
+    return {
+        "projects": len(payloads["projects"]),
+        "weeksIndexes": len(payloads["weeksByProject"]),
+        "filesIndexes": len(payloads["filesByProjectWeek"]),
+    }
 
 
 def build_thumbnail_bytes(raw_bytes: bytes, max_width: int = 480, quality: int = 72) -> bytes:
@@ -258,12 +428,23 @@ def get_projects(req: func.HttpRequest) -> func.HttpResponse:
     if cached is not None:
         return ok(cached)
 
+    if INDEX_ENABLED:
+        try:
+            indexed = load_json_blob(index_projects_blob_name())
+            if isinstance(indexed, list):
+                cache_set("projects", indexed)
+                return ok(indexed)
+        except Exception as exc:
+            logging.warning("get_projects index fallback: %s", exc)
+
     try:
         svc = get_blob_service()
         cc  = svc.get_container_client(CONTAINER)
         project_map: Dict[str, Dict] = {}
 
         for blob in cc.list_blobs():
+            if should_skip_for_content_index(blob.name):
+                continue
             parts = blob.name.split("/")
             if len(parts) < 3 or not parts[2]:
                 continue
@@ -276,11 +457,12 @@ def get_projects(req: func.HttpRequest) -> func.HttpResponse:
                 project_map[proj_folder] = {
                     "code": proj_folder, "name": slug,
                     "weeks": set(), "types": set(),
-                    "lastModified": None, "status": "completo",
+                    "lastModified": None, "fileCount": 0,
                 }
 
             p = project_map[proj_folder]
             p["weeks"].add(week_folder)
+            p["fileCount"] += 1
             pfx = prefix_of(file_name)
             if pfx != "FILE":
                 p["types"].add(pfx)
@@ -290,12 +472,18 @@ def get_projects(req: func.HttpRequest) -> func.HttpResponse:
 
         result = []
         for proj in sorted(project_map.values(), key=lambda x: x["code"]):
+            status_info = derive_project_status(
+                file_count=proj["fileCount"],
+                weeks_count=len(proj["weeks"]),
+                last_modified=proj["lastModified"],
+            )
             result.append({
                 "code":         proj["code"],
                 "name":         proj["name"],
                 "weeks":        len(proj["weeks"]),
                 "types":        "+".join(sorted(proj["types"])),
-                "status":       proj["status"],
+                "status":       status_info["status"],
+                "statusReason": status_info["statusReason"],
                 "lastModified": proj["lastModified"].isoformat() if proj["lastModified"] else None,
             })
         cache_set("projects", result)
@@ -321,6 +509,15 @@ def get_weeks(req: func.HttpRequest) -> func.HttpResponse:
     cached = cache_get(cache_key)
     if cached is not None:
         return ok(cached)
+
+    if INDEX_ENABLED:
+        try:
+            indexed = load_json_blob(index_weeks_blob_name(project_id))
+            if isinstance(indexed, list):
+                cache_set(cache_key, indexed)
+                return ok(indexed)
+        except Exception as exc:
+            logging.warning("get_weeks index fallback (%s): %s", project_id, exc)
 
     try:
         svc = get_blob_service()
@@ -368,6 +565,15 @@ def get_files(req: func.HttpRequest) -> func.HttpResponse:
     cached = cache_get(cache_key)
     if cached is not None:
         return ok(cached)
+
+    if INDEX_ENABLED:
+        try:
+            indexed = load_json_blob(index_files_blob_name(project_id, week))
+            if isinstance(indexed, list):
+                cache_set(cache_key, indexed)
+                return ok(indexed)
+        except Exception as exc:
+            logging.warning("get_files index fallback (%s/%s): %s", project_id, week, exc)
 
     try:
         svc = get_blob_service()
@@ -549,4 +755,42 @@ def health(req: func.HttpRequest) -> func.HttpResponse:
         "hasKey":    bool(ACCOUNT_KEY),
         "container": CONTAINER,
         "account":   ACCOUNT_NAME,
+        "indexEnabled": INDEX_ENABLED,
+        "indexPrefix": INDEX_PREFIX,
+        "indexRefreshCron": INDEX_REFRESH_CRON,
     })
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# POST /api/index/refresh (manual)
+# ══════════════════════════════════════════════════════════════════════════════
+@app.route(route="index/refresh", methods=["POST", "OPTIONS"])
+def index_refresh(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_ok()
+    if not is_authenticated(req):
+        return err("No autorizado", 401)
+
+    try:
+        stats = refresh_content_indexes()
+        return ok({"ok": True, "stats": stats, "prefix": INDEX_PREFIX})
+    except Exception as exc:
+        logging.error("index_refresh: %s", exc)
+        return err(str(exc), 500)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TIMER job: refresh indexes
+# ══════════════════════════════════════════════════════════════════════════════
+@app.timer_trigger(schedule=INDEX_REFRESH_CRON, arg_name="timer", run_on_startup=False, use_monitor=True)
+def index_refresh_timer(timer: func.TimerRequest) -> None:
+    if not INDEX_ENABLED:
+        logging.info("index_refresh_timer: skipped (INDEX_ENABLED=false)")
+        return
+
+    try:
+        stats = refresh_content_indexes()
+        logging.info("index_refresh_timer: ok projects=%s weeksIndexes=%s filesIndexes=%s",
+                     stats.get("projects"), stats.get("weeksIndexes"), stats.get("filesIndexes"))
+    except Exception as exc:
+        logging.error("index_refresh_timer: %s", exc)

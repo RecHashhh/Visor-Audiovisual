@@ -260,7 +260,7 @@ export default function GalleryPage() {
 
       <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
         <div>
-          <h1 className="page-title" style={{ fontSize: '1.2rem' }}>
+          <h1 className="page-title project-code-title" style={{ fontSize: '1.2rem' }}>
             {id} <span>/ {week}</span>
           </h1>
           <p className="page-sub">

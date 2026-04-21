@@ -143,6 +143,11 @@ code { font-family: var(--font-mono); background: var(--bg3); padding: 2px 6px; 
   color: var(--text);
   letter-spacing: -0.03em;
 }
+.project-code-title {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  letter-spacing: 0;
+}
 .page-title span { color: var(--accent); }
 .page-sub { font-size: 0.8rem; color: var(--text-dim); margin-top: 4px; }
 
@@ -258,7 +263,7 @@ code { font-family: var(--font-mono); background: var(--bg3); padding: 2px 6px; 
 }
 .week-row:hover { border-color: var(--accent-dim); background: var(--bg3); }
 .week-label {
-  font-family: var(--font-display);
+  font-family: var(--font-mono);
   font-weight: 700;
   font-size: 0.95rem;
   min-width: 90px;
@@ -729,7 +734,14 @@ code { font-family: var(--font-mono); background: var(--bg3); padding: 2px 6px; 
   padding: 12px 18px;
   min-width: 110px;
 }
-.stat-num { font-family: var(--font-display); font-size: 1.5rem; font-weight: 800; color: var(--accent); }
+.stat-num {
+  font-family: var(--font-mono);
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
 .stat-lbl { font-size: 0.7rem; color: var(--text-dim); margin-top: 2px; }
 
 /* ── VIDEO PLAYER ───────────────────────────────────────── */

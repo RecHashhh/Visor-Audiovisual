@@ -34,7 +34,7 @@ export default function WeeksPage() {
 
       <div className="page-header">
         <div style={{ display: 'flex', alignItems: 'baseline', gap: '12px', flexWrap: 'wrap' }}>
-          <h1 className="page-title" style={{ fontSize: '1.3rem' }}>
+          <h1 className="page-title project-code-title" style={{ fontSize: '1.3rem' }}>
             <span>{id}</span>
           </h1>
           <span style={{ fontFamily: 'var(--font-display)', fontSize: '1.1rem', color: 'var(--text)' }}>
