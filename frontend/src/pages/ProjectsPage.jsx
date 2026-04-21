@@ -35,7 +35,11 @@ export default function ProjectsPage() {
       .finally(() => setLoading(false))
   }, [])
 
-  const filtered = projects.filter(p => {
+  const visibleProjects = projects.filter(p => p.hasContent !== false)
+  const pendingProjects = projects.filter(p => statusInfo(p.status) === STATUS_INFO.pendiente)
+  const pendingNames = pendingProjects.map(p => p.name || p.code).join(' • ')
+
+  const filtered = visibleProjects.filter(p => {
     const q = search.toLowerCase()
     const match = p.name?.toLowerCase().includes(q) || p.code?.toLowerCase().includes(q)
     if (!match) return false
@@ -51,7 +55,7 @@ export default function ProjectsPage() {
     all: projects.length,
     done: projects.filter(p => statusInfo(p.status) === STATUS_INFO.completo).length,
     uploading: projects.filter(p => statusInfo(p.status) === STATUS_INFO.subiendo).length,
-    pending: projects.filter(p => statusInfo(p.status) === STATUS_INFO.pendiente).length,
+    pending: pendingProjects.length,
   }
 
   return (
@@ -76,7 +80,7 @@ export default function ProjectsPage() {
         </div>
         <div className="stat-box">
           <div className="stat-num" style={{ color: 'var(--red)' }}>{counts.pending}</div>
-          <div className="stat-lbl">Pendientes 🔴</div>
+          <div className="stat-lbl" title={pendingNames || 'No hay proyectos pendientes'}>Pendientes 🔴</div>
         </div>
       </div>
 
@@ -94,6 +98,7 @@ export default function ProjectsPage() {
           { key: 'pending',  label: `🔴 Pendiente (${counts.pending})` },
         ].map(f => (
           <button key={f.key} className={`filter-chip ${filter === f.key ? 'active' : ''}`}
+            title={f.key === 'pending' ? (pendingNames || 'No hay proyectos pendientes') : undefined}
             onClick={() => setFilter(f.key)}>
             {f.label}
           </button>

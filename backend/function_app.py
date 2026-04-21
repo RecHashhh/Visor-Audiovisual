@@ -127,6 +127,10 @@ def prefix_of(name: str) -> str:
     p = name.split("_")[0].upper() if "_" in name else ""
     return p if p in ("DRN", "FOT", "VID", "E360", "I360") else "FILE"
 
+def is_marker_file(name: str) -> bool:
+    n = (name or "").strip().lower()
+    return n in (".keep", ".empty", ".placeholder")
+
 def make_sas_url(blob_path: str, expiry_minutes: int = 60) -> str:
     if not ACCOUNT_KEY:
         raise ValueError("AZURE_STORAGE_KEY no configurado en Application Settings")
@@ -234,6 +238,30 @@ def clear_index_related_cache() -> None:
             if key == "projects" or key.startswith("weeks:") or key.startswith("files:"):
                 _cache.pop(key, None)
 
+def normalize_projects_payload(items: Any) -> list:
+    if not isinstance(items, list):
+        return []
+
+    normalized = []
+    for p in items:
+        if not isinstance(p, dict):
+            continue
+
+        out = dict(p)
+        weeks_count = int(out.get("weeks") or 0)
+        status = str(out.get("status") or "").strip().lower()
+
+        if "hasContent" not in out:
+            # Backward compatibility for older index snapshots.
+            out["hasContent"] = not (status == "pendiente" and weeks_count == 0)
+
+        if "statusReason" not in out:
+            out["statusReason"] = ""
+
+        normalized.append(out)
+
+    return normalized
+
 def build_index_payloads() -> Dict[str, Any]:
     svc = get_blob_service()
     cc  = svc.get_container_client(CONTAINER)
@@ -263,9 +291,14 @@ def build_index_payloads() -> Dict[str, Any]:
                 "types": set(),
                 "lastModified": None,
                 "fileCount": 0,
+                "hasMarker": False,
             }
 
         proj = project_map[project_id]
+        if is_marker_file(fname):
+            proj["hasMarker"] = True
+            continue
+
         proj["weeks"].add(week)
         proj["fileCount"] += 1
         pfx = prefix_of(fname)
@@ -309,6 +342,7 @@ def build_index_payloads() -> Dict[str, Any]:
             "types": "+".join(sorted(proj["types"])),
             "status": status_info["status"],
             "statusReason": status_info["statusReason"],
+            "hasContent": proj["fileCount"] > 0,
             "lastModified": proj["lastModified"].isoformat() if proj["lastModified"] else None,
         })
 
@@ -426,14 +460,15 @@ def get_projects(req: func.HttpRequest) -> func.HttpResponse:
 
     cached = cache_get("projects")
     if cached is not None:
-        return ok(cached)
+        return ok(normalize_projects_payload(cached))
 
     if INDEX_ENABLED:
         try:
             indexed = load_json_blob(index_projects_blob_name())
             if isinstance(indexed, list):
-                cache_set("projects", indexed)
-                return ok(indexed)
+                normalized = normalize_projects_payload(indexed)
+                cache_set("projects", normalized)
+                return ok(normalized)
         except Exception as exc:
             logging.warning("get_projects index fallback: %s", exc)
 
@@ -446,21 +481,34 @@ def get_projects(req: func.HttpRequest) -> func.HttpResponse:
             if should_skip_for_content_index(blob.name):
                 continue
             parts = blob.name.split("/")
-            if len(parts) < 3 or not parts[2]:
+            if len(parts) < 2:
                 continue
             proj_folder = parts[0]
-            week_folder = parts[1]
-            file_name   = parts[2]
 
             if proj_folder not in project_map:
                 slug = " ".join(proj_folder.split("_")[1:]).upper().replace("-", " ")
                 project_map[proj_folder] = {
                     "code": proj_folder, "name": slug,
                     "weeks": set(), "types": set(),
-                    "lastModified": None, "fileCount": 0,
+                    "lastModified": None, "fileCount": 0, "hasMarker": False,
                 }
 
             p = project_map[proj_folder]
+
+            # Marker at project root (e.g., project/.keep)
+            if len(parts) == 2 and is_marker_file(parts[1]):
+                p["hasMarker"] = True
+                continue
+
+            if len(parts) < 3 or not parts[2]:
+                continue
+
+            week_folder = parts[1]
+            file_name = parts[2]
+            if is_marker_file(file_name):
+                p["hasMarker"] = True
+                continue
+
             p["weeks"].add(week_folder)
             p["fileCount"] += 1
             pfx = prefix_of(file_name)
@@ -484,10 +532,12 @@ def get_projects(req: func.HttpRequest) -> func.HttpResponse:
                 "types":        "+".join(sorted(proj["types"])),
                 "status":       status_info["status"],
                 "statusReason": status_info["statusReason"],
+                "hasContent":   proj["fileCount"] > 0,
                 "lastModified": proj["lastModified"].isoformat() if proj["lastModified"] else None,
             })
-        cache_set("projects", result)
-        return ok(result)
+        normalized = normalize_projects_payload(result)
+        cache_set("projects", normalized)
+        return ok(normalized)
 
     except Exception as exc:
         logging.error("get_projects: %s", exc)
@@ -530,6 +580,8 @@ def get_weeks(req: func.HttpRequest) -> func.HttpResponse:
                 continue
             week = parts[1]
             fname = parts[2]
+            if is_marker_file(fname):
+                continue
             if week not in week_map:
                 week_map[week] = {"week": week, "count": 0, "types": set()}
             week_map[week]["count"] += 1
@@ -583,6 +635,8 @@ def get_files(req: func.HttpRequest) -> func.HttpResponse:
         for blob in cc.list_blobs(name_starts_with=f"{project_id}/{week}/"):
             fname = blob.name.split("/")[-1]
             if not fname:
+                continue
+            if is_marker_file(fname):
                 continue
             files.append({
                 "name":         fname,
@@ -726,6 +780,8 @@ def share_resolve(req: func.HttpRequest) -> func.HttpResponse:
         for blob in cc.list_blobs(name_starts_with=prefix):
             fname = blob.name.split("/")[-1]
             if not fname:
+                continue
+            if is_marker_file(fname):
                 continue
             try:
                 sas_url = make_sas_url(blob.name, remaining)
