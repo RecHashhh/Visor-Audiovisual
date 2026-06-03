@@ -14,6 +14,9 @@ export default function TopBar() {
           VISOR<span>/</span>AUDIOVISUAL
         </div>
       </Link>
+      <nav style={{ marginLeft: 12 }}>
+        <Link to="/upload" style={{ marginRight: 12 }}>Subir</Link>
+      </nav>
       <div className="topbar-sep" />
       <div className="topbar-user">
         <span style={{ display: 'none', gap: '6px' }}></span>

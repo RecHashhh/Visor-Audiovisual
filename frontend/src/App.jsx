@@ -8,6 +8,7 @@ import ProjectsPage from './pages/ProjectsPage'
 import WeeksPage    from './pages/WeeksPage'
 import GalleryPage  from './pages/GalleryPage'
 import SharePage    from './pages/SharePage'
+import UploadPage   from './pages/UploadPage'
 import TopBar       from './components/TopBar'
 
 // Guard que espera a que MSAL termine de procesar antes de decidir
@@ -80,6 +81,17 @@ export default function App() {
             <TopBar />
             <main className="main">
               <GalleryPage />
+            </main>
+          </div>
+        </RequireAuth>
+      } />
+
+      <Route path="/upload" element={
+        <RequireAuth>
+          <div className="layout">
+            <TopBar />
+            <main className="main">
+              <UploadPage />
             </main>
           </div>
         </RequireAuth>

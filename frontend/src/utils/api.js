@@ -104,5 +104,29 @@ export const api = {
   listShares:       ()           => apiFetch('/api/share/list'),
   revokeShare:      (token)      => apiFetch(`/api/share/${token}`, { method: 'DELETE' }),
   resolveShare:     (token)      => apiFetch(`/api/share/${token}`),
-}
+  postUpload:       (payload)    => apiFetch('/api/upload', { method: 'POST', body: JSON.stringify(payload) }),
+  postUploadCheck:  (payload)    => apiFetch('/api/upload/check', { method: 'POST', body: JSON.stringify(payload) }),
+  getUploadStatus:  (jobId)      => apiFetch(`/api/upload/status/${jobId}`),
+  getProjectSettings:   (projectCode) =>
+    apiFetch(`/api/projects/${encodeURIComponent(projectCode)}/settings`),
+  saveProjectSettings:  (projectCode, settings) =>
+    apiFetch(`/api/projects/${encodeURIComponent(projectCode)}/settings`, { method: 'POST', body: JSON.stringify(settings) }),
 
+  // ── Nuevos: SharePoint / OneDrive ─────────────────────────────────────────
+  // Resuelve una URL de carpeta SharePoint a { site_id, folder_path, site_name, ... }
+  // sin iniciar ninguna subida. Útil para validar antes de lanzar el job.
+  resolveSharepointUrl: (url) =>
+    apiFetch('/api/upload/resolve-sharepoint', { method: 'POST', body: JSON.stringify({ url }) }),
+
+  // Inicia una subida desde una carpeta SharePoint.
+  // payload: { projectCode, projectName, sharepointUrl?, siteId?, folderPath?,
+  //            prefijo?, maxWorkers?, refreshIndex?, recursive? }
+  postUploadSharepoint: (payload) =>
+    apiFetch('/api/upload/sharepoint', { method: 'POST', body: JSON.stringify(payload) }),
+
+  // Inicia una subida desde OneDrive de un usuario.
+  // payload: { projectCode, projectName, userEmail, folderPath,
+  //            prefijo?, maxWorkers?, refreshIndex?, recursive? }
+  postUploadOnedrive: (payload) =>
+    apiFetch('/api/upload/onedrive', { method: 'POST', body: JSON.stringify(payload) }),
+}

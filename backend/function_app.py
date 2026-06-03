@@ -21,6 +21,7 @@ from azure.storage.blob import (
     BlobSasPermissions,
 )
 from azure.core.exceptions import ResourceNotFoundError
+import uploader
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
@@ -36,9 +37,10 @@ INDEX_PREFIX = os.environ.get("INDEX_PREFIX", "_index")
 INDEX_ENABLED = os.environ.get("INDEX_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
 INDEX_REFRESH_CRON = os.environ.get("INDEX_REFRESH_CRON", "0 0 4 * * *")
 
-# Cache simple en memoria para acelerar lecturas repetidas.
 _cache: Dict[str, Dict[str, Any]] = {}
 _cache_lock = Lock()
+_upload_jobs: Dict[str, Dict[str, Any]] = {}
+_upload_jobs_lock = Lock()
 
 # ── HELPERS ────────────────────────────────────────────────────────────────
 
@@ -95,17 +97,10 @@ def cache_set(key: str, value: Any, ttl_seconds: int = CACHE_TTL_SECONDS) -> Non
         _cache[key] = {"expires_at": expires_at, "value": value}
 
 def is_authenticated(req: func.HttpRequest) -> bool:
-    """
-    Verifica que la request tenga un token Bearer de Microsoft.
-    NO valida la firma — Azure Static Web Apps / la red corporativa ya garantiza
-    que solo usuarios autenticados llegan aquí. Los datos son de solo lectura
-    del Blob que ya es privado; los SAS tokens tienen expiración corta.
-    """
     auth = req.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
         return False
     token_part = auth[7:]
-    # Un JWT válido tiene 3 partes separadas por punto
     return len(token_part.split(".")) == 3
 
 def get_blob_service() -> BlobServiceClient:
@@ -283,6 +278,9 @@ def index_weeks_blob_name(project_id: str) -> str:
 def index_files_blob_name(project_id: str, week: str) -> str:
     return f"{INDEX_PREFIX.strip('/')}/files/{project_id}/{week}.json"
 
+def project_settings_blob_name(project_id: str) -> str:
+    return f"{INDEX_PREFIX.strip('/')}/settings/{project_id}.json"
+
 def should_skip_for_content_index(blob_name: str) -> bool:
     shares_prefix = f"{SHARES_PREFIX.strip('/')}/"
     index_prefix = f"{INDEX_PREFIX.strip('/')}/"
@@ -316,25 +314,18 @@ def clear_index_related_cache() -> None:
 def normalize_projects_payload(items: Any) -> list:
     if not isinstance(items, list):
         return []
-
     normalized = []
     for p in items:
         if not isinstance(p, dict):
             continue
-
         out = dict(p)
         weeks_count = int(out.get("weeks") or 0)
         status = str(out.get("status") or "").strip().lower()
-
         if "hasContent" not in out:
-            # Backward compatibility for older index snapshots.
             out["hasContent"] = not (status == "pendiente" and weeks_count == 0)
-
         if "statusReason" not in out:
             out["statusReason"] = ""
-
         normalized.append(out)
-
     return normalized
 
 def build_index_payloads() -> Dict[str, Any]:
@@ -348,7 +339,6 @@ def build_index_payloads() -> Dict[str, Any]:
     for blob in cc.list_blobs():
         if should_skip_for_content_index(blob.name):
             continue
-
         parts = blob.name.split("/")
         if len(parts) < 3 or not parts[-1]:
             continue
@@ -363,13 +353,9 @@ def build_index_payloads() -> Dict[str, Any]:
         if project_id not in project_map:
             slug = " ".join(project_id.split("_")[1:]).upper().replace("-", " ")
             project_map[project_id] = {
-                "code": project_id,
-                "name": slug,
-                "weeks": set(),
-                "types": set(),
-                "lastModified": None,
-                "fileCount": 0,
-                "hasMarker": False,
+                "code": project_id, "name": slug,
+                "weeks": set(), "types": set(),
+                "lastModified": None, "fileCount": 0, "hasMarker": False,
             }
 
         proj = project_map[project_id]
@@ -398,11 +384,8 @@ def build_index_payloads() -> Dict[str, Any]:
         if file_key not in files_map_by_project_week:
             files_map_by_project_week[file_key] = []
         files_map_by_project_week[file_key].append({
-            "name": fname,
-            "path": blob.name,
-            "size": blob.size,
-            "type": type_of(fname),
-            "prefix": prefix_of(fname),
+            "name": fname, "path": blob.name, "size": blob.size,
+            "type": type_of(fname), "prefix": prefix_of(fname),
             "lastModified": blob.last_modified.isoformat() if blob.last_modified else None,
         })
 
@@ -414,8 +397,7 @@ def build_index_payloads() -> Dict[str, Any]:
             last_modified=proj["lastModified"],
         )
         projects.append({
-            "code": proj["code"],
-            "name": proj["name"],
+            "code": proj["code"], "name": proj["name"],
             "weeks": len(proj["weeks"]),
             "types": "+".join(sorted(proj["types"])),
             "status": status_info["status"],
@@ -426,11 +408,10 @@ def build_index_payloads() -> Dict[str, Any]:
 
     weeks_by_project: Dict[str, list] = {}
     for project_id, week_map in week_map_by_project.items():
-        weeks = [
+        weeks_by_project[project_id] = [
             {"week": k, "count": v["count"], "types": sorted(v["types"])}
             for k, v in sorted(week_map.items())
         ]
-        weeks_by_project[project_id] = weeks
 
     for key in files_map_by_project_week:
         files_map_by_project_week[key].sort(key=lambda f: f["name"])
@@ -460,24 +441,76 @@ def refresh_content_indexes() -> Dict[str, int]:
         "filesIndexes": len(payloads["filesByProjectWeek"]),
     }
 
-
 def build_thumbnail_bytes(raw_bytes: bytes, max_width: int = 480, quality: int = 72) -> bytes:
     with Image.open(io.BytesIO(raw_bytes)) as img:
-        # Apply EXIF orientation so thumbnails match camera orientation.
         img = ImageOps.exif_transpose(img)
         if img.mode not in ("RGB", "L"):
             img = img.convert("RGB")
         elif img.mode == "L":
             img = img.convert("RGB")
-
         w, h = img.size
         if w > max_width:
             new_h = int((h * max_width) / w)
             img = img.resize((max_width, max(1, new_h)), Image.Resampling.LANCZOS)
-
         out = io.BytesIO()
         img.save(out, format="JPEG", quality=quality, optimize=True, progressive=True)
         return out.getvalue()
+
+
+# ── UPLOAD JOB HELPERS ────────────────────────────────────────────────────
+
+def _create_job(project_code: str, project_name: str, mode: str = "urls") -> str:
+    job_id = uuid.uuid4().hex
+    with _upload_jobs_lock:
+        _upload_jobs[job_id] = {
+            "id": job_id,
+            "mode": mode,
+            "projectCode": project_code,
+            "projectName": project_name,
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+            "status": "queued",
+            "files": [],
+            "summary": None,
+        }
+    return job_id
+
+def _set_job_status(job_id: str, status: str, summary: Any = None) -> None:
+    with _upload_jobs_lock:
+        job = _upload_jobs.get(job_id)
+        if job:
+            job["status"] = status
+            if summary is not None:
+                job["summary"] = summary
+
+def _progress_cb_for_job(job_id: str):
+    def _cb(idx: int, event: str, payload: dict):
+        with _upload_jobs_lock:
+            job = _upload_jobs.get(job_id)
+            if not job:
+                return
+            if idx >= 0 and idx < len(job["files"]):
+                f = job["files"][idx]
+                if event == "downloading":
+                    f["phase"] = "downloading"
+                    f["downloaded"] = int(payload.get("downloaded", 0) or 0)
+                    f["downloadTotal"] = int(payload.get("total", 0) or 0)
+                elif event == "downloaded":
+                    f["phase"] = "downloaded"
+                    f["downloaded"] = int(payload.get("size", 0) or 0)
+                elif event == "uploading":
+                    f["phase"] = "uploading"
+                elif event == "uploaded":
+                    f["phase"] = "uploaded"
+                    f["uploaded"] = int(payload.get("size", 0) or 0)
+                    f["blob"] = payload.get("blob")
+                elif event == "error":
+                    f["phase"] = "error"
+                    f["error"] = payload.get("error")
+            else:
+                if event == "finished":
+                    job["status"] = "finished"
+                    job["summary"] = payload.get("summary")
+    return _cb
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -495,7 +528,7 @@ def thumb(req: func.HttpRequest) -> func.HttpResponse:
     if not blob_path:
         return err("blobPath es requerido")
     if ext not in ("jpg", "jpeg", "png", "webp", "tif", "tiff"):
-        return err("thumb solo disponible para imagenes", 400)
+        return err("thumb solo disponible para imágenes", 400)
 
     try:
         max_width = int(req.params.get("w", "480"))
@@ -573,7 +606,6 @@ def get_projects(req: func.HttpRequest) -> func.HttpResponse:
 
             p = project_map[proj_folder]
 
-            # Marker at project root (e.g., project/.keep)
             if len(parts) == 2 and is_marker_file(parts[1]):
                 p["hasMarker"] = True
                 continue
@@ -622,6 +654,52 @@ def get_projects(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as exc:
         logging.error("get_projects: %s", exc)
         return err(str(exc), 500)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GET/POST /api/projects/{project_id}/settings
+# ══════════════════════════════════════════════════════════════════════════════
+@app.route(route="projects/{project_id}/settings", methods=["GET", "POST", "OPTIONS"])
+def project_settings(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_ok()
+    if not is_authenticated(req):
+        return err("No autorizado", 401)
+
+    project_id = req.route_params.get("project_id", "").strip()
+    if not project_id:
+        return err("project_id es requerido", 400)
+
+    if req.method == "GET":
+        try:
+            settings = load_json_blob(project_settings_blob_name(project_id)) or {}
+            return ok(settings)
+        except Exception as exc:
+            logging.error("get_project_settings: %s", exc)
+            return err(str(exc), 500)
+
+    if req.method == "POST":
+        try:
+            payload = req.get_json()
+        except ValueError:
+            return err("Payload JSON inválido", 400)
+
+        if not isinstance(payload, dict):
+            return err("Payload debe ser un objeto JSON", 400)
+
+        settings = {
+            "prefijo": payload.get("prefijo", "FOT"),
+            "maxWorkers": int(payload.get("maxWorkers", 4)) if payload.get("maxWorkers") is not None else 4,
+            "refreshIndex": bool(payload.get("refreshIndex", True)),
+            "savedAt": datetime.now(timezone.utc).isoformat(),
+        }
+
+        try:
+            save_json_blob(project_settings_blob_name(project_id), settings)
+            return ok({"saved": True, "projectId": project_id, "settings": settings})
+        except Exception as exc:
+            logging.error("save_project_settings: %s", exc)
+            return err(str(exc), 500)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -820,8 +898,7 @@ def share_list(req: func.HttpRequest) -> func.HttpResponse:
     try:
         now = datetime.now(timezone.utc)
         shares = list_shares()
-        result = [{**s, "expired": datetime.fromisoformat(s["expiresAt"]) < now}
-                  for s in shares]
+        result = [{**s, "expired": datetime.fromisoformat(s["expiresAt"]) < now} for s in shares]
         result.sort(key=lambda x: x.get("expiresAt", ""), reverse=True)
         return ok(result)
     except Exception as exc:
@@ -849,7 +926,6 @@ def share_resolve(req: func.HttpRequest) -> func.HttpResponse:
             logging.error("share_delete: %s", exc)
             return err(str(exc), 500)
 
-    # GET público — sin auth
     share = load_share(share_token)
     if not share:
         return err("Enlace no encontrado", 404)
@@ -870,16 +946,13 @@ def share_resolve(req: func.HttpRequest) -> func.HttpResponse:
 
         for blob in cc.list_blobs(name_starts_with=prefix):
             fname = blob.name.split("/")[-1]
-            if not fname:
-                continue
-            if is_marker_file(fname):
+            if not fname or is_marker_file(fname):
                 continue
             try:
                 sas_url = make_sas_url(blob.name, remaining)
             except Exception:
                 sas_url = ""
-            files.append({"name": fname, "path": blob.name,
-                          "type": type_of(fname), "sasUrl": sas_url})
+            files.append({"name": fname, "path": blob.name, "type": type_of(fname), "sasUrl": sas_url})
 
         files.sort(key=lambda f: f["name"])
         return ok({**share, "files": files})
@@ -934,10 +1007,370 @@ def index_refresh_timer(timer: func.TimerRequest) -> None:
     if not INDEX_ENABLED:
         logging.info("index_refresh_timer: skipped (INDEX_ENABLED=false)")
         return
-
     try:
         stats = refresh_content_indexes()
-        logging.info("index_refresh_timer: ok projects=%s weeksIndexes=%s filesIndexes=%s",
-                     stats.get("projects"), stats.get("weeksIndexes"), stats.get("filesIndexes"))
+        logging.info(
+            "index_refresh_timer: ok projects=%s weeksIndexes=%s filesIndexes=%s",
+            stats.get("projects"), stats.get("weeksIndexes"), stats.get("filesIndexes")
+        )
     except Exception as exc:
         logging.error("index_refresh_timer: %s", exc)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# POST /api/upload
+# Body: { projectCode, projectName, urls: [...], prefijo?, maxWorkers?, refreshIndex? }
+# ══════════════════════════════════════════════════════════════════════════════
+@app.route(route="upload", methods=["POST", "OPTIONS"])
+def upload(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_ok()
+    if not is_authenticated(req):
+        return err("No autorizado", 401)
+
+    try:
+        body = req.get_json()
+    except Exception:
+        return err("Cuerpo JSON inválido", 400)
+
+    project_code  = (body.get("projectCode") or "").strip()
+    project_name  = (body.get("projectName") or "").strip()
+    urls          = body.get("urls") or []
+    prefijo       = body.get("prefijo")
+    max_workers   = int(body.get("maxWorkers") or 4)
+    refresh_index = bool(body.get("refreshIndex") or False)
+
+    if not project_code or not project_name:
+        return err("projectCode y projectName son requeridos", 400)
+    if not isinstance(urls, list) or not urls:
+        return err("urls: lista de URLs requerida", 400)
+
+    try:
+        job_id = _create_job(project_code, project_name, mode="urls")
+        svc = get_blob_service()
+
+        with _upload_jobs_lock:
+            for i, u in enumerate(urls):
+                name = uploader._guess_filename_from_url(u)
+                _upload_jobs[job_id]["files"].append({
+                    "index": i, "url": u, "name": name,
+                    "phase": "queued",
+                    "downloaded": 0, "downloadTotal": 0, "uploaded": 0, "error": None,
+                })
+
+        progress_cb = _progress_cb_for_job(job_id)
+
+        def _run():
+            try:
+                _set_job_status(job_id, "running")
+                res = uploader.upload_urls_with_progress(
+                    svc, project_code, project_name, urls,
+                    progress_cb, prefijo=prefijo, max_workers=max_workers,
+                )
+                _set_job_status(job_id, "finished", res)
+                if refresh_index:
+                    try:
+                        refresh_content_indexes()
+                    except Exception as e:
+                        logging.error("background index refresh: %s", e)
+            except Exception as exc:
+                logging.error("upload job: %s", exc)
+                _set_job_status(job_id, "error", {"error": str(exc)})
+
+        import threading
+        threading.Thread(target=_run, daemon=True).start()
+
+        return ok({"ok": True, "jobId": job_id})
+    except Exception as exc:
+        logging.error("upload: %s", exc)
+        return err(str(exc), 500)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# POST /api/upload/check
+# ══════════════════════════════════════════════════════════════════════════════
+@app.route(route="upload/check", methods=["POST", "OPTIONS"])
+def upload_check(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_ok()
+    if not is_authenticated(req):
+        return err("No autorizado", 401)
+
+    try:
+        body = req.get_json()
+    except Exception:
+        return err("Cuerpo JSON inválido", 400)
+
+    project_code = (body.get("projectCode") or "").strip()
+    project_name = (body.get("projectName") or "").strip()
+    urls = body.get("urls") or []
+
+    if not project_code or not project_name:
+        return err("projectCode y projectName son requeridos", 400)
+    if not isinstance(urls, list) or not urls:
+        return err("urls: lista de URLs requerida", 400)
+
+    try:
+        slug    = uploader._slugify_name(project_name)
+        week    = uploader._week_iso_for_date()
+        carpeta = f"{project_code}_{slug}"
+
+        svc = get_blob_service()
+        cc  = svc.get_container_client(CONTAINER)
+
+        existing = set()
+        existing_norm = {}
+        prefix = f"{carpeta}/{week}/"
+        for blob in cc.list_blobs(name_starts_with=prefix):
+            fname = blob.name[len(prefix):]
+            existing.add(fname)
+            n = "".join(ch for ch in fname.lower() if ch.isalnum())
+            if n:
+                existing_norm[n] = fname
+
+        results = []
+        for url in urls:
+            name = uploader._guess_filename_from_url(url)
+            exists = name in existing
+            similar = False
+            similar_to = None
+            if not exists:
+                n = "".join(ch for ch in name.lower() if ch.isalnum())
+                if n and n in existing_norm:
+                    similar = True
+                    similar_to = existing_norm[n]
+
+            blob_path = (
+                f"{carpeta}/{week}/{name}" if exists
+                else (f"{carpeta}/{week}/{similar_to}" if similar else None)
+            )
+            results.append({
+                "url": url, "name": name,
+                "exists": exists, "similar": similar,
+                "similarTo": similar_to, "blobPath": blob_path,
+            })
+
+        return ok({"ok": True, "week": week, "carpeta": carpeta, "results": results})
+    except Exception as exc:
+        logging.error("upload_check: %s", exc)
+        return err(str(exc), 500)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GET /api/upload/status/{job_id}
+# ══════════════════════════════════════════════════════════════════════════════
+@app.route(route="upload/status/{job_id}", methods=["GET", "OPTIONS"])
+def upload_status(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_ok()
+    if not is_authenticated(req):
+        return err("No autorizado", 401)
+
+    job_id = req.route_params.get("job_id")
+    with _upload_jobs_lock:
+        job = _upload_jobs.get(job_id)
+        if not job:
+            return err("jobId no encontrado", 404)
+        return ok({k: job[k] for k in job})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# POST /api/upload/sharepoint
+# Body: { projectCode, projectName, sharepointUrl, prefijo?, maxWorkers?,
+#         refreshIndex?, recursive? }
+#
+# Alternativa con site_id + folder_path explícitos:
+# Body: { projectCode, projectName, siteId, folderPath, prefijo?, ... }
+# ══════════════════════════════════════════════════════════════════════════════
+@app.route(route="upload/sharepoint", methods=["POST", "OPTIONS"])
+def upload_sharepoint(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_ok()
+    if not is_authenticated(req):
+        return err("No autorizado", 401)
+
+    try:
+        body = req.get_json()
+    except Exception:
+        return err("Cuerpo JSON inválido", 400)
+
+    project_code   = (body.get("projectCode") or "").strip()
+    project_name   = (body.get("projectName") or "").strip()
+    sp_url         = (body.get("sharepointUrl") or "").strip()
+    site_id        = (body.get("siteId") or "").strip()
+    folder_path    = (body.get("folderPath") or "/").strip()
+    prefijo        = (body.get("prefijo") or "FOT").strip()
+    max_workers    = int(body.get("maxWorkers") or 4)
+    refresh_index  = bool(body.get("refreshIndex") or False)
+    recursive      = bool(body.get("recursive") if body.get("recursive") is not None else True)
+
+    if not project_code or not project_name:
+        return err("projectCode y projectName son requeridos", 400)
+    if not sp_url and not site_id:
+        return err("Proporciona sharepointUrl o siteId + folderPath", 400)
+
+    try:
+        job_id = _create_job(project_code, project_name, mode="sharepoint")
+
+        def _run():
+            try:
+                _set_job_status(job_id, "running")
+
+                # Resolver URL si no viene siteId explícito
+                resolved_site_id = site_id
+                resolved_folder  = folder_path
+
+                if sp_url and not site_id:
+                    config = uploader.resolver_sharepoint_desde_url(sp_url)
+                    resolved_site_id = config.get("site_id") or ""
+                    resolved_folder  = config.get("folder_path") or "/"
+                    with _upload_jobs_lock:
+                        job = _upload_jobs.get(job_id)
+                        if job:
+                            job["resolvedSiteId"]   = resolved_site_id
+                            job["resolvedFolderPath"] = resolved_folder
+
+                if not resolved_site_id:
+                    _set_job_status(job_id, "error", {"error": "No se pudo obtener site_id de SharePoint"})
+                    return
+
+                # Listar archivos Graph
+                token   = uploader._get_graph_token()
+                archivos = uploader.list_sharepoint_files(token, resolved_site_id, resolved_folder, recursive)
+
+                with _upload_jobs_lock:
+                    job = _upload_jobs.get(job_id)
+                    if job:
+                        job["totalFiles"] = len(archivos)
+
+                svc    = get_blob_service()
+                slug   = uploader._slugify_name(project_name)
+                resumen = uploader.procesar_archivos(
+                    archivos, svc, project_code, slug,
+                    prefijo_jpg=prefijo, max_workers=max_workers,
+                )
+
+                _set_job_status(job_id, "finished", resumen)
+
+                if refresh_index:
+                    try:
+                        refresh_content_indexes()
+                    except Exception as e:
+                        logging.error("background index refresh (sp): %s", e)
+
+            except Exception as exc:
+                logging.error("upload_sharepoint job: %s", exc)
+                _set_job_status(job_id, "error", {"error": str(exc)})
+
+        import threading
+        threading.Thread(target=_run, daemon=True).start()
+
+        return ok({"ok": True, "jobId": job_id})
+
+    except Exception as exc:
+        logging.error("upload_sharepoint: %s", exc)
+        return err(str(exc), 500)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# POST /api/upload/onedrive
+# Body: { projectCode, projectName, userEmail, folderPath, prefijo?,
+#         maxWorkers?, refreshIndex?, recursive? }
+# ══════════════════════════════════════════════════════════════════════════════
+@app.route(route="upload/onedrive", methods=["POST", "OPTIONS"])
+def upload_onedrive(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_ok()
+    if not is_authenticated(req):
+        return err("No autorizado", 401)
+
+    try:
+        body = req.get_json()
+    except Exception:
+        return err("Cuerpo JSON inválido", 400)
+
+    project_code  = (body.get("projectCode") or "").strip()
+    project_name  = (body.get("projectName") or "").strip()
+    user_email    = (body.get("userEmail") or "").strip()
+    folder_path   = (body.get("folderPath") or "/").strip()
+    prefijo       = (body.get("prefijo") or "FOT").strip()
+    max_workers   = int(body.get("maxWorkers") or 4)
+    refresh_index = bool(body.get("refreshIndex") or False)
+    recursive     = bool(body.get("recursive") if body.get("recursive") is not None else True)
+
+    if not project_code or not project_name:
+        return err("projectCode y projectName son requeridos", 400)
+    if not user_email:
+        return err("userEmail es requerido", 400)
+
+    try:
+        job_id = _create_job(project_code, project_name, mode="onedrive")
+
+        def _run():
+            try:
+                _set_job_status(job_id, "running")
+
+                token    = uploader._get_graph_token()
+                archivos = uploader.list_onedrive_files(token, user_email, folder_path, recursive)
+
+                with _upload_jobs_lock:
+                    job = _upload_jobs.get(job_id)
+                    if job:
+                        job["totalFiles"] = len(archivos)
+
+                svc  = get_blob_service()
+                slug = uploader._slugify_name(project_name)
+                resumen = uploader.procesar_archivos(
+                    archivos, svc, project_code, slug,
+                    prefijo_jpg=prefijo, max_workers=max_workers,
+                )
+
+                _set_job_status(job_id, "finished", resumen)
+
+                if refresh_index:
+                    try:
+                        refresh_content_indexes()
+                    except Exception as e:
+                        logging.error("background index refresh (od): %s", e)
+
+            except Exception as exc:
+                logging.error("upload_onedrive job: %s", exc)
+                _set_job_status(job_id, "error", {"error": str(exc)})
+
+        import threading
+        threading.Thread(target=_run, daemon=True).start()
+
+        return ok({"ok": True, "jobId": job_id})
+
+    except Exception as exc:
+        logging.error("upload_onedrive: %s", exc)
+        return err(str(exc), 500)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# POST /api/upload/resolve-sharepoint
+# Resuelve una URL de SharePoint a site_id + folder_path sin iniciar la subida
+# Body: { url }
+# ══════════════════════════════════════════════════════════════════════════════
+@app.route(route="upload/resolve-sharepoint", methods=["POST", "OPTIONS"])
+def upload_resolve_sharepoint(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_ok()
+    if not is_authenticated(req):
+        return err("No autorizado", 401)
+
+    try:
+        body = req.get_json()
+    except Exception:
+        return err("Cuerpo JSON inválido", 400)
+
+    url = (body.get("url") or "").strip()
+    if not url:
+        return err("url es requerido", 400)
+
+    try:
+        config = uploader.resolver_sharepoint_desde_url(url)
+        return ok(config)
+    except Exception as exc:
+        logging.error("upload_resolve_sharepoint: %s", exc)
+        return err(str(exc), 500)
