@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { api } from '../utils/api'
+import { fetchThumb } from '../utils/thumbs'
 
 const PREFIX_BADGE = {
   DRN: 'badge-orange', FOT: 'badge-blue', VID: 'badge-red',
@@ -95,7 +96,6 @@ export default function GalleryPage() {
   const [browse, setBrowse] = useState({ folders: [], files: [] })
   const [sasCache, setSasCache] = useState({})
   const [thumbCache, setThumbCache] = useState({})
-  const thumbObjectUrlsRef = useRef(new Set())
   const closeTimerRef = useRef(null)
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('all')
@@ -108,7 +108,33 @@ export default function GalleryPage() {
   const [showSharePanel, setShowSharePanel] = useState(false)
   const [copied, setCopied] = useState(false)
   const viewerRequestIdRef = useRef(0)
+  const lightboxRef = useRef(null)
   const weekLabel = (week || '').split('/').join(' / ')
+  const lightboxOpen = Boolean(fullscreenViewer)
+
+  // Accesibilidad del lightbox: foco inicial dentro, Tab no escapa,
+  // y al cerrar el foco vuelve a donde estaba.
+  useEffect(() => {
+    if (!lightboxOpen || !lightboxRef.current) return
+    const node = lightboxRef.current
+    const previouslyFocused = document.activeElement
+    const focusables = () => node.querySelectorAll('button, a[href], video')
+    focusables()[0]?.focus()
+    const onKey = (e) => {
+      if (e.key !== 'Tab') return
+      const els = Array.from(focusables())
+      if (!els.length) return
+      const first = els[0]
+      const last = els[els.length - 1]
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
+    }
+    node.addEventListener('keydown', onKey)
+    return () => {
+      node.removeEventListener('keydown', onKey)
+      previouslyFocused?.focus?.()
+    }
+  }, [lightboxOpen])
 
   useEffect(() => {
     setLoading(true)
@@ -126,14 +152,8 @@ export default function GalleryPage() {
       if (closeTimerRef.current) {
         clearTimeout(closeTimerRef.current)
       }
-      thumbObjectUrlsRef.current.forEach((url) => {
-        try {
-          URL.revokeObjectURL(url)
-        } catch {
-          // no-op
-        }
-      })
-      thumbObjectUrlsRef.current.clear()
+      // Las miniaturas viven en la caché compartida (utils/thumbs): no se
+      // revocan al salir, así volver a esta semana es instantáneo.
     }
   }, [])
 
@@ -280,9 +300,9 @@ export default function GalleryPage() {
   return (
     <>
       <div className="breadcrumb">
-        <Link to="/">Proyectos</Link>
+        <Link to="/proyectos">Proyectos</Link>
         <span className="sep">›</span>
-        <Link to={`/project/${id}`}>{id}</Link>
+        <Link to={`/proyectos/project/${id}`}>{id}</Link>
         <span className="sep">›</span>
         <span className="current">{weekLabel}</span>
       </div>
@@ -297,7 +317,7 @@ export default function GalleryPage() {
           </p>
         </div>
         <button className="btn btn-ghost btn-sm" onClick={() => setShowSharePanel(s => !s)}>
-          🔗 Compartir semana
+          Compartir semana
         </button>
       </div>
 
@@ -305,7 +325,7 @@ export default function GalleryPage() {
       {showSharePanel && (
         <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', padding: '16px', marginBottom: '16px' }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, marginBottom: '10px', fontSize: '0.9rem' }}>
-            🔗 Generar enlace externo (sin login)
+            Generar enlace externo (sin login)
           </div>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
             <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>Expira en:</span>
@@ -319,7 +339,7 @@ export default function GalleryPage() {
             <div style={{ marginTop: '10px', display: 'flex', gap: '8px', alignItems: 'center', background: 'var(--bg3)', padding: '10px 12px', borderRadius: 'var(--radius)', flexWrap: 'wrap' }}>
               <code style={{ flex: 1, fontSize: '0.75rem', wordBreak: 'break-all' }}>{shareLink}</code>
               <button className="btn btn-primary btn-sm" onClick={copyLink}>
-                {copied ? '✅ Copiado' : 'Copiar'}
+                {copied ? 'Copiado ✓' : 'Copiar'}
               </button>
             </div>
           )}
@@ -337,7 +357,7 @@ export default function GalleryPage() {
                   <div
                     key={folder.path}
                     className="week-row"
-                    onClick={() => nav(`/project/${id}/week/${encodeURIComponent(folder.path)}`)}
+                    onClick={() => nav(`/proyectos/project/${id}/week/${encodeURIComponent(folder.path)}`)}
                   >
                     <div className="week-label">{folder.name}</div>
                     <div className="week-badges">
@@ -390,7 +410,6 @@ export default function GalleryPage() {
                       file={file}
                       thumbUrl={thumbCache[file.path] || null}
                       onThumbLoaded={(url) => {
-                        thumbObjectUrlsRef.current.add(url)
                         setThumbCache((c) => (c[file.path] ? c : { ...c, [file.path]: url }))
                       }}
                       getSas={getSas}
@@ -434,7 +453,7 @@ export default function GalleryPage() {
                   <div className="gallery-preview-empty">
                     <div className="gallery-preview-emptyTitle">No se pudo cargar la vista previa</div>
                     <div className="gallery-preview-emptyText">Puedes descargar el archivo para abrirlo localmente.</div>
-                    <button className="btn btn-primary btn-sm" onClick={() => download(viewer.file)}>⬇ Descargar archivo</button>
+                    <button className="btn btn-primary btn-sm" onClick={() => download(viewer.file)}>Descargar archivo</button>
                   </div>
                 )}
 
@@ -442,7 +461,7 @@ export default function GalleryPage() {
                   <div className="lightbox-file-fallback">
                     <div className="lightbox-file-icon">{viewer.kind === 'raw' ? 'RAW' : viewer.kind === 'i360' ? '360°' : '📄'}</div>
                     <div className="lightbox-file-text">Vista previa no disponible</div>
-                    <button className="btn btn-primary btn-sm" onClick={() => download(viewer.file)}>⬇ Descargar archivo</button>
+                    <button className="btn btn-primary btn-sm" onClick={() => download(viewer.file)}>Descargar archivo</button>
                   </div>
                 )}
               </div>
@@ -451,7 +470,7 @@ export default function GalleryPage() {
                 <div className="gallery-preview-actions">
                   <button className="btn btn-ghost btn-sm" onClick={() => navViewer(-1)}>‹ Anterior</button>
                   <button className="btn btn-ghost btn-sm" onClick={() => navViewer(1)}>Siguiente ›</button>
-                  <button className="btn btn-primary btn-sm" onClick={() => download(viewer.file)}>⬇ Descargar</button>
+                  <button className="btn btn-primary btn-sm" onClick={() => download(viewer.file)}>Descargar</button>
                 </div>
 
                 <div className="lightbox-meta-panel gallery-preview-meta">
@@ -476,8 +495,15 @@ export default function GalleryPage() {
           )}
 
           {fullscreenViewer && (
-            <div className="lightbox-overlay" onClick={e => e.target.className === 'lightbox-overlay' && setFullscreenViewer(null)}>
-              <button className="lightbox-close" onClick={() => setFullscreenViewer(null)}>✕</button>
+            <div
+              ref={lightboxRef}
+              className="lightbox-overlay"
+              role="dialog"
+              aria-modal="true"
+              aria-label={`Vista completa: ${fullscreenViewer.file?.name || 'archivo'}`}
+              onClick={e => e.target.className === 'lightbox-overlay' && setFullscreenViewer(null)}
+            >
+              <button className="lightbox-close" aria-label="Cerrar vista completa" onClick={() => setFullscreenViewer(null)}>✕</button>
               <button className="lightbox-nav prev" onClick={() => navViewer(-1)}>‹</button>
               <button className="lightbox-nav next" onClick={() => navViewer(1)}>›</button>
 
@@ -486,7 +512,7 @@ export default function GalleryPage() {
               <div className="lightbox-bottom-row">
                 <div className="lightbox-toolbar">
                   <span className="lightbox-name">{fullscreenViewer.file?.name || 'Sin nombre'}</span>
-                  <button className="btn btn-ghost btn-sm" onClick={() => download(fullscreenViewer.file)}>⬇ Descargar</button>
+                  <button className="btn btn-ghost btn-sm" onClick={() => download(fullscreenViewer.file)}>Descargar</button>
                 </div>
 
                 <div className="lightbox-meta-panel">
@@ -527,8 +553,8 @@ function GalleryItem({ file, thumbUrl, onThumbLoaded, getSas, onClick, active })
         if (entries[0].isIntersecting && !loading) {
           setLoading(true)
           try {
-            const blob = await api.getThumbBlob(file.path, 520, 68)
-            const thumbObjectUrl = URL.createObjectURL(blob)
+            // Caché compartida entre navegaciones: volver a la semana no re-descarga
+            const thumbObjectUrl = await fetchThumb(file.path, { w: 520, q: 68 })
             onThumbLoaded(thumbObjectUrl)
             observer.disconnect()
           } catch (err) {

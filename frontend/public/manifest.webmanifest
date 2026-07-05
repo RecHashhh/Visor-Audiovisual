@@ -1,0 +1,17 @@
+{
+  "name": "RIPCON Hub Audiovisual",
+  "short_name": "RIPCON Hub",
+  "description": "Material audiovisual de proyectos, marcas y contenido de RIPCONCIV",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f5f6fa",
+  "theme_color": "#192d96",
+  "icons": [
+    {
+      "src": "/brands/ripconciv/favicon.png",
+      "sizes": "256x256",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

@@ -21,6 +21,8 @@ from azure.storage.blob import (
     BlobSasPermissions,
 )
 from azure.core.exceptions import ResourceNotFoundError
+import jwt
+from jwt import PyJWKClient
 import uploader
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
@@ -36,6 +38,23 @@ STATUS_UPLOAD_WINDOW_HOURS = int(os.environ.get("STATUS_UPLOAD_WINDOW_HOURS", "4
 INDEX_PREFIX = os.environ.get("INDEX_PREFIX", "_index")
 INDEX_ENABLED = os.environ.get("INDEX_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
 INDEX_REFRESH_CRON = os.environ.get("INDEX_REFRESH_CRON", "0 0 4 * * *")
+CONFIG_PREFIX = os.environ.get("CONFIG_PREFIX", "_config")
+# Biblioteca de contenido por sección (marcas, documentos, videos...), separada
+# de las carpetas de proyectos: _media/<seccion>/<carpeta>/<archivos>
+MEDIA_PREFIX = os.environ.get("MEDIA_PREFIX", "_media")
+
+# ── Identidad y accesos ────────────────────────────────────────────────────
+# AUTH_MODE: "lax" (por defecto) decodifica los claims y verifica tenant + expiración,
+#            pero no la firma — no puede bloquear el acceso por problemas de validación,
+#            y ya es más estricto que el backend anterior (que aceptaba cualquier token).
+#            "strict" además valida firma/audiencia contra Entra ID (JWKS): actívalo en
+#            Application Settings (AUTH_MODE=strict) al mismo tiempo que el modo Restringido.
+AAD_TENANT_ID = os.environ.get("AAD_TENANT_ID", "12f2a4b5-4935-464d-9dae-e0525d0c593f")
+AAD_CLIENT_ID = os.environ.get("AAD_CLIENT_ID", "a4413b75-4069-48e0-b055-55dce319dfbc")
+AUTH_MODE = os.environ.get("AUTH_MODE", "lax").strip().lower()
+# Súper-administradores permanentes (coma-separados). Siempre admins, aunque la
+# config de accesos diga otra cosa — es la vía de recuperación ante un bloqueo.
+ADMIN_EMAILS = {e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").split(",") if e.strip()}
 
 _cache: Dict[str, Dict[str, Any]] = {}
 _cache_lock = Lock()
@@ -51,6 +70,29 @@ def cors_headers() -> Dict[str, str]:
         "Access-Control-Allow-Headers": "Authorization, Content-Type",
         "Content-Type": "application/json",
     }
+
+def _resolve_carpeta(project_code: str, project_name: str) -> str:
+    """
+    Construye el nombre del directorio raíz del proyecto de forma inteligente 
+    para evitar duplicados (ej. '16002_opa_opa').
+    """
+    code = (project_code or "").strip()
+    
+    # Normalizamos el nombre para compararlo y concatenarlo
+    # (minúsculas y cambiando espacios por guiones)
+    name_slug = (project_name or "").strip().replace(" ", "-").lower()
+    
+    # Si no hay código, usamos solo el nombre
+    if not code:
+        return name_slug
+        
+    # Magia aquí: Si el código ya termina con el nombre (ej. code="16002_opa", name="opa"),
+    # devolvemos el código tal cual para no duplicar.
+    if code.lower().endswith(f"_{name_slug}"):
+        return code
+        
+    # Si es un código limpio (ej. code="16002", name="opa"), los unimos
+    return f"{code}_{name_slug}"
 
 def ok(data: Any, status: int = 200) -> func.HttpResponse:
     return func.HttpResponse(
@@ -215,6 +257,22 @@ def make_sas_url(blob_path: str, expiry_minutes: int = 60) -> str:
     )
     return f"https://{ACCOUNT_NAME}.blob.core.windows.net/{CONTAINER}/{blob_path}?{sas}"
 
+def make_sas_url_write(blob_path: str, expiry_minutes: int = 360) -> str:
+    """SAS de escritura para subida directa navegador→blob (Put Blob / Put Block).
+    Solo permite escribir/crear ese blob exacto; no leer ni listar."""
+    if not ACCOUNT_KEY:
+        raise ValueError("AZURE_STORAGE_KEY no configurado en Application Settings")
+    expiry = datetime.now(timezone.utc) + timedelta(minutes=expiry_minutes)
+    sas = generate_blob_sas(
+        account_name=ACCOUNT_NAME,
+        container_name=CONTAINER,
+        blob_name=blob_path,
+        account_key=ACCOUNT_KEY,
+        permission=BlobSasPermissions(write=True, create=True),
+        expiry=expiry,
+    )
+    return f"https://{ACCOUNT_NAME}.blob.core.windows.net/{CONTAINER}/{blob_path}?{sas}"
+
 def derive_project_status(file_count: int, weeks_count: int, last_modified: Optional[datetime]) -> Dict[str, str]:
     if file_count <= 0 or weeks_count <= 0:
         return {"status": "pendiente", "statusReason": "Sin archivos o semanas registradas"}
@@ -284,7 +342,14 @@ def project_settings_blob_name(project_id: str) -> str:
 def should_skip_for_content_index(blob_name: str) -> bool:
     shares_prefix = f"{SHARES_PREFIX.strip('/')}/"
     index_prefix = f"{INDEX_PREFIX.strip('/')}/"
-    return blob_name.startswith(shares_prefix) or blob_name.startswith(index_prefix)
+    config_prefix = f"{CONFIG_PREFIX.strip('/')}/"
+    media_prefix = f"{MEDIA_PREFIX.strip('/')}/"
+    return (
+        blob_name.startswith(shares_prefix)
+        or blob_name.startswith(index_prefix)
+        or blob_name.startswith(config_prefix)
+        or blob_name.startswith(media_prefix)
+    )
 
 def load_json_blob(blob_name: str) -> Optional[Any]:
     svc = get_blob_service()
@@ -356,6 +421,7 @@ def build_index_payloads() -> Dict[str, Any]:
                 "code": project_id, "name": slug,
                 "weeks": set(), "types": set(),
                 "lastModified": None, "fileCount": 0, "hasMarker": False,
+                "coverPath": None, "coverIsDrone": False,
             }
 
         proj = project_map[project_id]
@@ -368,6 +434,12 @@ def build_index_payloads() -> Dict[str, Any]:
         pfx = prefix_of(fname)
         if pfx != "FILE":
             proj["types"].add(pfx)
+        # Portada del proyecto: primera imagen; las de dron (DRN) tienen prioridad
+        if type_of(fname) == "img":
+            is_drone = pfx == "DRN"
+            if proj["coverPath"] is None or (is_drone and not proj["coverIsDrone"]):
+                proj["coverPath"] = blob.name
+                proj["coverIsDrone"] = is_drone
         lm = blob.last_modified
         if lm and (proj["lastModified"] is None or lm > proj["lastModified"]):
             proj["lastModified"] = lm
@@ -404,6 +476,7 @@ def build_index_payloads() -> Dict[str, Any]:
             "statusReason": status_info["statusReason"],
             "hasContent": proj["fileCount"] > 0,
             "lastModified": proj["lastModified"].isoformat() if proj["lastModified"] else None,
+            "coverPath": proj["coverPath"],
         })
 
     weeks_by_project: Dict[str, list] = {}
@@ -441,20 +514,249 @@ def refresh_content_indexes() -> Dict[str, int]:
         "filesIndexes": len(payloads["filesByProjectWeek"]),
     }
 
-def build_thumbnail_bytes(raw_bytes: bytes, max_width: int = 480, quality: int = 72) -> bytes:
-    with Image.open(io.BytesIO(raw_bytes)) as img:
-        img = ImageOps.exif_transpose(img)
-        if img.mode not in ("RGB", "L"):
-            img = img.convert("RGB")
-        elif img.mode == "L":
-            img = img.convert("RGB")
+def build_thumbnail_bytes(raw_bytes: bytes, max_width: int = 480, quality: int = 72,
+                          trim: bool = False):
+    """Devuelve (bytes, content_type). Con trim=True recorta el arte al contenido
+    (modo logo: elimina el área de respeto) y conserva la transparencia PNG."""
+    with Image.open(io.BytesIO(raw_bytes)) as src:
+        img = ImageOps.exif_transpose(src)
+        has_alpha = img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info)
+        img = img.convert("RGBA") if has_alpha else img.convert("RGB")
+
+        if trim:
+            if has_alpha:
+                bbox = img.split()[3].getbbox()
+            else:
+                from PIL import ImageChops
+                px = img.load()
+                w0, h0 = img.size
+                corners = [px[2, 2], px[w0 - 3, 2], px[2, h0 - 3], px[w0 - 3, h0 - 3]]
+                bg = max(set(corners), key=corners.count)
+                diff = ImageChops.difference(img, Image.new("RGB", img.size, bg)).convert("L")
+                bbox = diff.point(lambda p: 255 if p > 12 else 0).getbbox()
+            if bbox:
+                l, t, r, b = bbox
+                m = int(max(r - l, b - t) * 0.16)
+                w0, h0 = img.size
+                img = img.crop((max(0, l - m), max(0, t - m), min(w0, r + m), min(h0, b + m)))
+
         w, h = img.size
         if w > max_width:
             new_h = int((h * max_width) / w)
             img = img.resize((max_width, max(1, new_h)), Image.Resampling.LANCZOS)
+
         out = io.BytesIO()
+        if has_alpha:
+            img.save(out, format="PNG", optimize=True)
+            return out.getvalue(), "image/png"
         img.save(out, format="JPEG", quality=quality, optimize=True, progressive=True)
-        return out.getvalue()
+        return out.getvalue(), "image/jpeg"
+
+
+# ── AUTENTICACIÓN Y CONTROL DE ACCESOS ────────────────────────────────────
+# La identidad sale del token de Entra ID que ya envía el frontend (MSAL).
+# Los permisos viven en un blob JSON ({CONFIG_PREFIX}/access.json) que el
+# administrador edita desde la página "Accesos".
+
+KNOWN_SECTIONS = ["material", "proyectos", "marcas", "documentos", "videos", "eventos", "redes"]
+ACCESS_CACHE_KEY = "access:config"
+_ACCESS_NONE = "__no_config__"
+
+def access_config_blob_name() -> str:
+    return f"{CONFIG_PREFIX.strip('/')}/access.json"
+
+_jwks_client = None
+_jwks_lock = Lock()
+
+def _get_jwks_client() -> PyJWKClient:
+    global _jwks_client
+    with _jwks_lock:
+        if _jwks_client is None:
+            url = f"https://login.microsoftonline.com/{AAD_TENANT_ID}/discovery/v2.0/keys"
+            _jwks_client = PyJWKClient(url, cache_keys=True, lifespan=3600)
+        return _jwks_client
+
+def get_caller(req: func.HttpRequest) -> Optional[Dict[str, str]]:
+    """Extrae la identidad (email + nombre) del token Bearer. None si el token
+    falta o no es válido."""
+    auth = req.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return None
+    token = auth[7:].strip()
+    if token.count(".") != 2:
+        return None
+    try:
+        if AUTH_MODE == "lax":
+            claims = jwt.decode(token, options={"verify_signature": False, "verify_exp": True})
+        else:
+            signing_key = _get_jwks_client().get_signing_key_from_jwt(token)
+            # audience cubre tokens v1 (api://<clientId>) y v2 (<clientId>).
+            # El issuer cambia entre v1/v2, así que el tenant se verifica por claim.
+            claims = jwt.decode(
+                token,
+                key=signing_key.key,
+                algorithms=["RS256"],
+                audience=[AAD_CLIENT_ID, f"api://{AAD_CLIENT_ID}"],
+                options={"verify_iss": False},
+            )
+        tid = str(claims.get("tid") or "")
+        iss = str(claims.get("iss") or "")
+        if AAD_TENANT_ID != tid and AAD_TENANT_ID not in iss:
+            logging.warning("get_caller: tenant no coincide (tid=%s)", tid)
+            return None
+        email = (
+            claims.get("preferred_username") or claims.get("upn")
+            or claims.get("email") or claims.get("unique_name") or ""
+        ).strip().lower()
+        if not email:
+            return None
+        return {"email": email, "name": str(claims.get("name") or "")}
+    except Exception as exc:
+        logging.warning("get_caller: token rechazado: %s", exc)
+        return None
+
+def load_access_config() -> Optional[dict]:
+    cached = cache_get(ACCESS_CACHE_KEY)
+    if cached is not None:
+        return None if cached == _ACCESS_NONE else cached
+    cfg = None
+    try:
+        cfg = load_json_blob(access_config_blob_name())
+    except Exception as exc:
+        logging.error("load_access_config: %s", exc)
+    cache_set(ACCESS_CACHE_KEY, cfg if cfg is not None else _ACCESS_NONE, ttl_seconds=30)
+    return cfg
+
+def _full_access(email: str, name: str, is_admin: bool, restricted: bool, bootstrap: bool) -> dict:
+    return {
+        "email": email, "name": name, "allowed": True, "isAdmin": is_admin,
+        "sections": "*", "projects": "*", "restricted": restricted, "bootstrap": bootstrap,
+    }
+
+def effective_perms(caller: Optional[Dict[str, str]]) -> dict:
+    if caller is None:
+        return {"email": "", "name": "", "allowed": False, "isAdmin": False,
+                "sections": [], "projects": [], "restricted": False, "bootstrap": False}
+
+    email, name = caller["email"], caller.get("name", "")
+    cfg = load_access_config()
+    env_admin = email in ADMIN_EMAILS
+
+    if cfg is None:
+        # Sin configuración todavía: modo abierto (comportamiento histórico).
+        # Si tampoco hay ADMIN_EMAILS, cualquier usuario autenticado puede crear
+        # la primera configuración (bootstrap) y reclamar la administración.
+        bootstrap = not ADMIN_EMAILS
+        return _full_access(email, name, env_admin or bootstrap, False, bootstrap)
+
+    restricted = bool(cfg.get("restricted"))
+    entry = None
+    for u in cfg.get("users", []):
+        if isinstance(u, dict) and str(u.get("email", "")).strip().lower() == email:
+            entry = u
+            break
+
+    if env_admin or (entry and entry.get("enabled", True) and entry.get("role") == "admin"):
+        return _full_access(email, name, True, restricted, False)
+
+    if entry and entry.get("enabled", True):
+        sections = entry.get("sections", [])
+        if sections != "*":
+            sections = [s for s in sections if s in KNOWN_SECTIONS] if isinstance(sections, list) else []
+        projects = entry.get("projects", "*")
+        if projects != "*" and not isinstance(projects, list):
+            projects = []
+        return {"email": email, "name": name or str(entry.get("name") or ""), "allowed": True,
+                "isAdmin": False, "sections": sections, "projects": projects,
+                "restricted": restricted, "bootstrap": False}
+
+    if restricted:
+        return {"email": email, "name": name, "allowed": False, "isAdmin": False,
+                "sections": [], "projects": [], "restricted": True, "bootstrap": False}
+
+    # Config existe pero en modo abierto: miembros del tenant no listados ven todo.
+    return _full_access(email, name, False, restricted, False)
+
+def require_perms(req: func.HttpRequest, section: Optional[str] = None,
+                  project: Optional[str] = None, admin: bool = False):
+    """Devuelve (perms, None) si el caller pasa los requisitos, o
+    (None, HttpResponse) con el error listo para retornar."""
+    caller = get_caller(req)
+    perms = effective_perms(caller)
+    if not perms["allowed"]:
+        return None, err("No autorizado", 401 if caller is None else 403)
+    if admin and not perms["isAdmin"]:
+        return None, err("Requiere permisos de administrador", 403)
+    if not perms["isAdmin"]:
+        if section and perms["sections"] != "*" and section not in perms["sections"]:
+            return None, err("Sin acceso a esta sección", 403)
+        if project and perms["projects"] != "*" and project not in perms["projects"]:
+            return None, err("Sin acceso a este proyecto", 403)
+    return perms, None
+
+def require_blob_access(req: func.HttpRequest, blob_path: str):
+    """Gate por ruta de blob: los paths de _media se controlan por sección;
+    el resto son proyectos (material + código de proyecto)."""
+    seg = [s for s in (blob_path or "").split("/") if s]
+    if seg and seg[0] == MEDIA_PREFIX.strip("/"):
+        if len(seg) < 3:
+            return None, err("Ruta de media inválida", 400)
+        return require_perms(req, section=seg[1])
+    return require_perms(req, section="material", project=seg[0] if seg else "")
+
+def _filter_projects_by_perms(items: list, perms: dict) -> list:
+    if perms.get("isAdmin") or perms.get("projects") == "*":
+        return items
+    allowed = set(perms.get("projects") or [])
+    return [p for p in items if p.get("code") in allowed]
+
+def sanitize_access_config(payload: Any, saver_email: str) -> dict:
+    if not isinstance(payload, dict):
+        raise ValueError("Configuración inválida")
+    users_in = payload.get("users", [])
+    if not isinstance(users_in, list):
+        raise ValueError("users debe ser una lista")
+
+    seen = set()
+    users = []
+    for u in users_in:
+        if not isinstance(u, dict):
+            continue
+        email = str(u.get("email", "")).strip().lower()
+        if not email or "@" not in email or email in seen:
+            continue
+        seen.add(email)
+        role = u.get("role") if u.get("role") in ("admin", "viewer") else "viewer"
+        sections = u.get("sections", [])
+        if sections != "*":
+            sections = [s for s in sections if s in KNOWN_SECTIONS] if isinstance(sections, list) else []
+        projects = u.get("projects", "*")
+        if projects != "*":
+            projects = [str(p).strip() for p in projects if str(p).strip()] if isinstance(projects, list) else []
+        users.append({
+            "email": email,
+            "name": str(u.get("name") or "").strip(),
+            "role": role,
+            "enabled": bool(u.get("enabled", True)),
+            "sections": sections,
+            "projects": projects,
+        })
+
+    active_admins = [u for u in users if u["role"] == "admin" and u["enabled"]]
+    if not active_admins and not ADMIN_EMAILS:
+        raise ValueError("Debe quedar al menos una persona administradora activa")
+    if saver_email not in ADMIN_EMAILS:
+        saver = next((u for u in users if u["email"] == saver_email), None)
+        if not saver or saver["role"] != "admin" or not saver["enabled"]:
+            raise ValueError("Tu propio usuario debe seguir siendo administrador activo")
+
+    return {
+        "version": 1,
+        "restricted": bool(payload.get("restricted")),
+        "users": users,
+        "updatedAt": datetime.now(timezone.utc).isoformat(),
+        "updatedBy": saver_email,
+    }
 
 
 # ── UPLOAD JOB HELPERS ────────────────────────────────────────────────────
@@ -520,13 +822,15 @@ def _progress_cb_for_job(job_id: str):
 def thumb(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return func.HttpResponse("", status_code=204, headers=binary_headers("application/json"))
-    if not is_authenticated(req):
-        return err("No autorizado", 401)
 
     blob_path = (req.params.get("blobPath") or "").strip()
     ext = ext_of(blob_path)
     if not blob_path:
         return err("blobPath es requerido")
+
+    _, auth_err = require_blob_access(req, blob_path)
+    if auth_err:
+        return auth_err
     if ext not in ("jpg", "jpeg", "png", "webp", "tif", "tiff"):
         return err("thumb solo disponible para imágenes", 400)
 
@@ -538,22 +842,23 @@ def thumb(req: func.HttpRequest) -> func.HttpResponse:
         quality = int(req.params.get("q", "72"))
     except Exception:
         quality = 72
+    trim = (req.params.get("mode") or "").strip().lower() == "logo"
 
     max_width = max(160, min(max_width, 1280))
     quality = max(40, min(quality, 90))
 
-    cache_key = f"thumb:{blob_path}:{max_width}:{quality}"
+    cache_key = f"thumb:{blob_path}:{max_width}:{quality}:{'logo' if trim else 'std'}"
     cached = cache_get(cache_key)
     if cached is not None:
-        return func.HttpResponse(body=cached, status_code=200, headers=binary_headers("image/jpeg"))
+        return func.HttpResponse(body=cached[0], status_code=200, headers=binary_headers(cached[1]))
 
     try:
         svc = get_blob_service()
         bc = svc.get_blob_client(container=CONTAINER, blob=blob_path)
         raw = bc.download_blob().readall()
-        thumb_bytes = build_thumbnail_bytes(raw, max_width=max_width, quality=quality)
-        cache_set(cache_key, thumb_bytes, ttl_seconds=300)
-        return func.HttpResponse(body=thumb_bytes, status_code=200, headers=binary_headers("image/jpeg"))
+        thumb_bytes, content_type = build_thumbnail_bytes(raw, max_width=max_width, quality=quality, trim=trim)
+        cache_set(cache_key, (thumb_bytes, content_type), ttl_seconds=300)
+        return func.HttpResponse(body=thumb_bytes, status_code=200, headers=binary_headers(content_type))
     except Exception as exc:
         logging.error("thumb: %s", exc)
         return err(str(exc), 500)
@@ -566,12 +871,14 @@ def thumb(req: func.HttpRequest) -> func.HttpResponse:
 def get_projects(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
-    if not is_authenticated(req):
-        return err("No autorizado", 401)
+    perms, auth_err = require_perms(req, section="material")
+    if auth_err:
+        return auth_err
 
+    # El caché guarda la lista completa; el filtrado por permisos es por caller.
     cached = cache_get("projects")
     if cached is not None:
-        return ok(normalize_projects_payload(cached))
+        return ok(_filter_projects_by_perms(normalize_projects_payload(cached), perms))
 
     if INDEX_ENABLED:
         try:
@@ -579,7 +886,7 @@ def get_projects(req: func.HttpRequest) -> func.HttpResponse:
             if isinstance(indexed, list):
                 normalized = normalize_projects_payload(indexed)
                 cache_set("projects", normalized)
-                return ok(normalized)
+                return ok(_filter_projects_by_perms(normalized, perms))
         except Exception as exc:
             logging.warning("get_projects index fallback: %s", exc)
 
@@ -602,6 +909,7 @@ def get_projects(req: func.HttpRequest) -> func.HttpResponse:
                     "code": proj_folder, "name": slug,
                     "weeks": set(), "types": set(),
                     "lastModified": None, "fileCount": 0, "hasMarker": False,
+                    "coverPath": None, "coverIsDrone": False,
                 }
 
             p = project_map[proj_folder]
@@ -626,6 +934,11 @@ def get_projects(req: func.HttpRequest) -> func.HttpResponse:
             pfx = prefix_of(file_name)
             if pfx != "FILE":
                 p["types"].add(pfx)
+            if type_of(file_name) == "img":
+                is_drone = pfx == "DRN"
+                if p["coverPath"] is None or (is_drone and not p["coverIsDrone"]):
+                    p["coverPath"] = blob.name
+                    p["coverIsDrone"] = is_drone
             lm = blob.last_modified
             if lm and (p["lastModified"] is None or lm > p["lastModified"]):
                 p["lastModified"] = lm
@@ -646,10 +959,11 @@ def get_projects(req: func.HttpRequest) -> func.HttpResponse:
                 "statusReason": status_info["statusReason"],
                 "hasContent":   proj["fileCount"] > 0,
                 "lastModified": proj["lastModified"].isoformat() if proj["lastModified"] else None,
+                "coverPath":    proj["coverPath"],
             })
         normalized = normalize_projects_payload(result)
         cache_set("projects", normalized)
-        return ok(normalized)
+        return ok(_filter_projects_by_perms(normalized, perms))
 
     except Exception as exc:
         logging.error("get_projects: %s", exc)
@@ -663,8 +977,9 @@ def get_projects(req: func.HttpRequest) -> func.HttpResponse:
 def project_settings(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
-    if not is_authenticated(req):
-        return err("No autorizado", 401)
+    _, auth_err = require_perms(req, admin=True)
+    if auth_err:
+        return auth_err
 
     project_id = req.route_params.get("project_id", "").strip()
     if not project_id:
@@ -709,10 +1024,11 @@ def project_settings(req: func.HttpRequest) -> func.HttpResponse:
 def get_weeks(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
-    if not is_authenticated(req):
-        return err("No autorizado", 401)
 
     project_id = req.route_params.get("project_id", "")
+    _, auth_err = require_perms(req, section="material", project=project_id)
+    if auth_err:
+        return auth_err
     cache_key = f"weeks:{project_id}"
     cached = cache_get(cache_key)
     if cached is not None:
@@ -768,11 +1084,12 @@ def get_weeks(req: func.HttpRequest) -> func.HttpResponse:
 def get_files(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
-    if not is_authenticated(req):
-        return err("No autorizado", 401)
 
     project_id = req.route_params.get("project_id", "")
     week       = normalize_folder_path(req.route_params.get("week", ""))
+    _, auth_err = require_perms(req, section="material", project=project_id)
+    if auth_err:
+        return auth_err
     cache_key = f"files:{project_id}:{week}"
     cached = cache_get(cache_key)
     if cached is not None:
@@ -804,11 +1121,12 @@ def get_files(req: func.HttpRequest) -> func.HttpResponse:
 def browse_folder(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
-    if not is_authenticated(req):
-        return err("No autorizado", 401)
 
     project_id = req.route_params.get("project_id", "")
     path = normalize_folder_path(req.params.get("path", ""))
+    _, auth_err = require_perms(req, section="material", project=project_id)
+    if auth_err:
+        return auth_err
     cache_key = f"browse:{project_id}:{path}"
     cached = cache_get(cache_key)
     if cached is not None:
@@ -832,8 +1150,6 @@ def browse_folder(req: func.HttpRequest) -> func.HttpResponse:
 def sas_generate(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
-    if not is_authenticated(req):
-        return err("No autorizado", 401)
 
     try:
         body           = req.get_json()
@@ -841,6 +1157,9 @@ def sas_generate(req: func.HttpRequest) -> func.HttpResponse:
         expiry_minutes = min(int(body.get("expiryMinutes", 60)), 1440)
         if not blob_path:
             return err("blobPath es requerido")
+        _, auth_err = require_blob_access(req, blob_path)
+        if auth_err:
+            return auth_err
         sas_url = make_sas_url(blob_path, expiry_minutes)
         return ok({"sasUrl": sas_url, "expiresInMinutes": expiry_minutes})
     except Exception as exc:
@@ -855,8 +1174,9 @@ def sas_generate(req: func.HttpRequest) -> func.HttpResponse:
 def share_create(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
-    if not is_authenticated(req):
-        return err("No autorizado", 401)
+    _, auth_err = require_perms(req, admin=True)
+    if auth_err:
+        return auth_err
 
     try:
         body        = req.get_json()
@@ -892,8 +1212,9 @@ def share_create(req: func.HttpRequest) -> func.HttpResponse:
 def share_list(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
-    if not is_authenticated(req):
-        return err("No autorizado", 401)
+    _, auth_err = require_perms(req, admin=True)
+    if auth_err:
+        return auth_err
 
     try:
         now = datetime.now(timezone.utc)
@@ -917,8 +1238,9 @@ def share_resolve(req: func.HttpRequest) -> func.HttpResponse:
     share_token = req.route_params.get("share_token", "")
 
     if req.method == "DELETE":
-        if not is_authenticated(req):
-            return err("No autorizado", 401)
+        _, auth_err = require_perms(req, admin=True)
+        if auth_err:
+            return auth_err
         try:
             delete_share(share_token)
             return ok({"deleted": True})
@@ -982,14 +1304,258 @@ def health(req: func.HttpRequest) -> func.HttpResponse:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# GET /api/me — identidad y permisos efectivos del usuario autenticado
+# ══════════════════════════════════════════════════════════════════════════════
+@app.route(route="me", methods=["GET", "OPTIONS"])
+def get_me(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_ok()
+    caller = get_caller(req)
+    if caller is None:
+        return err("No autorizado", 401)
+    return ok(effective_perms(caller))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GET/POST /api/access — configuración de accesos (solo administradores)
+# ══════════════════════════════════════════════════════════════════════════════
+@app.route(route="access", methods=["GET", "POST", "OPTIONS"])
+def access_config_endpoint(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_ok()
+
+    perms, auth_err = require_perms(req, admin=True)
+    if auth_err:
+        return auth_err
+
+    if req.method == "GET":
+        cfg = load_access_config()
+        return ok({
+            "config": cfg if cfg is not None else {"restricted": False, "users": []},
+            "exists": cfg is not None,
+            "bootstrap": perms.get("bootstrap", False),
+            "envAdmins": sorted(ADMIN_EMAILS),
+            "knownSections": KNOWN_SECTIONS,
+        })
+
+    try:
+        payload = req.get_json()
+    except ValueError:
+        return err("Payload JSON inválido", 400)
+
+    try:
+        cfg = sanitize_access_config(payload, perms["email"])
+    except ValueError as exc:
+        return err(str(exc), 400)
+
+    try:
+        save_json_blob(access_config_blob_name(), cfg)
+        with _cache_lock:
+            _cache.pop(ACCESS_CACHE_KEY, None)
+        return ok({"saved": True, "config": cfg})
+    except Exception as exc:
+        logging.error("save_access_config: %s", exc)
+        return err(str(exc), 500)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BIBLIOTECA DE MEDIA — carpetas por sección bajo _media/<seccion>/<carpeta>/
+# GET  /api/media/{section}                → lista carpetas (p. ej. marcas)
+# POST /api/media/{section}   (admin)      → crea carpeta {name}
+# GET  /api/media/{section}/{folder}       → archivos + metadata (marca.json)
+# POST /api/media/{section}/{folder}/upload (admin, multipart) → sube archivos
+# ══════════════════════════════════════════════════════════════════════════════
+MEDIA_SECTIONS = ("marcas", "documentos", "videos", "eventos", "redes")
+_FOLDER_FORBIDDEN = set('/\\#?%*:|"<>')
+
+def _media_root(section: str) -> str:
+    return f"{MEDIA_PREFIX.strip('/')}/{section}"
+
+def _sanitize_folder_name(raw: str) -> Optional[str]:
+    name = " ".join((raw or "").split())
+    if not name or len(name) > 60:
+        return None
+    if name.startswith((".", "_")) or any(c in _FOLDER_FORBIDDEN for c in name):
+        return None
+    return name
+
+@app.route(route="media/{section}", methods=["GET", "POST", "OPTIONS"])
+def media_section(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_ok()
+
+    section = (req.route_params.get("section") or "").strip().lower()
+    if section not in MEDIA_SECTIONS:
+        return err("Sección de media desconocida", 400)
+
+    if req.method == "POST":
+        _, auth_err = require_perms(req, admin=True)
+        if auth_err:
+            return auth_err
+        try:
+            body = req.get_json()
+        except ValueError:
+            return err("Payload JSON inválido", 400)
+        name = _sanitize_folder_name(body.get("name", ""))
+        if not name:
+            return err("Nombre inválido: usa hasta 60 caracteres sin / \\ # ? % * : | \" < >", 400)
+        try:
+            svc = get_blob_service()
+            cc = svc.get_container_client(CONTAINER)
+            prefix = f"{_media_root(section)}/{name}/"
+            for _ in cc.list_blobs(name_starts_with=prefix):
+                return err("Ya existe una carpeta con ese nombre", 409)
+            bc = svc.get_blob_client(container=CONTAINER, blob=f"{prefix}.keep")
+            bc.upload_blob(b"", overwrite=True)
+            return ok({"created": True, "name": name})
+        except Exception as exc:
+            logging.error("media_create_folder: %s", exc)
+            return err(str(exc), 500)
+
+    _, auth_err = require_perms(req, section=section)
+    if auth_err:
+        return auth_err
+    try:
+        svc = get_blob_service()
+        cc = svc.get_container_client(CONTAINER)
+        prefix = f"{_media_root(section)}/"
+        folder_map: Dict[str, Dict[str, Any]] = {}
+        for blob in cc.list_blobs(name_starts_with=prefix):
+            remainder = blob.name[len(prefix):]
+            if "/" not in remainder:
+                continue
+            folder = remainder.split("/", 1)[0]
+            leaf = remainder.split("/")[-1]
+            if folder not in folder_map:
+                folder_map[folder] = {"name": folder, "fileCount": 0, "lastModified": None}
+            entry = folder_map[folder]
+            if leaf and not is_marker_file(leaf) and leaf != "marca.json":
+                entry["fileCount"] += 1
+                lm = blob.last_modified
+                if lm and (entry["lastModified"] is None or lm > entry["lastModified"]):
+                    entry["lastModified"] = lm
+        folders = [
+            {**f, "lastModified": f["lastModified"].isoformat() if f["lastModified"] else None}
+            for f in sorted(folder_map.values(), key=lambda x: x["name"].lower())
+        ]
+        return ok({"section": section, "folders": folders})
+    except Exception as exc:
+        logging.error("media_list_folders: %s", exc)
+        return err(str(exc), 500)
+
+
+@app.route(route="media/{section}/{folder}", methods=["GET", "OPTIONS"])
+def media_folder(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_ok()
+
+    section = (req.route_params.get("section") or "").strip().lower()
+    if section not in MEDIA_SECTIONS:
+        return err("Sección de media desconocida", 400)
+    folder = unquote(req.route_params.get("folder") or "").strip()
+    if not folder:
+        return err("Carpeta requerida", 400)
+
+    _, auth_err = require_perms(req, section=section)
+    if auth_err:
+        return auth_err
+
+    try:
+        svc = get_blob_service()
+        cc = svc.get_container_client(CONTAINER)
+        prefix = f"{_media_root(section)}/{folder}/"
+        files = []
+        meta = None
+        found_any = False
+        for blob in cc.list_blobs(name_starts_with=prefix):
+            found_any = True
+            remainder = blob.name[len(prefix):]
+            leaf = remainder.split("/")[-1]
+            if not leaf or is_marker_file(leaf):
+                continue
+            if remainder == "marca.json":
+                try:
+                    raw = cc.get_blob_client(blob).download_blob().readall()
+                    if len(raw) <= 32_768:
+                        parsed = json.loads(raw.decode("utf-8"))
+                        if isinstance(parsed, dict):
+                            meta = parsed
+                except Exception as exc:
+                    logging.warning("media_folder marca.json inválido (%s): %s", folder, exc)
+                continue
+            files.append({
+                "name": remainder,
+                "path": blob.name,
+                "size": blob.size,
+                "type": type_of(leaf),
+                "lastModified": blob.last_modified.isoformat() if blob.last_modified else None,
+            })
+        if not found_any:
+            return err("Carpeta no encontrada", 404)
+        files.sort(key=lambda f: f["name"].lower())
+        return ok({"section": section, "folder": folder, "files": files, "meta": meta})
+    except Exception as exc:
+        logging.error("media_folder: %s", exc)
+        return err(str(exc), 500)
+
+
+@app.route(route="media/{section}/{folder}/upload", methods=["POST", "OPTIONS"])
+def media_upload(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_ok()
+
+    section = (req.route_params.get("section") or "").strip().lower()
+    if section not in MEDIA_SECTIONS:
+        return err("Sección de media desconocida", 400)
+    folder = unquote(req.route_params.get("folder") or "").strip()
+    if not folder:
+        return err("Carpeta requerida", 400)
+
+    _, auth_err = require_perms(req, admin=True)
+    if auth_err:
+        return auth_err
+
+    try:
+        incoming = req.files.getlist("files") if req.files else []
+    except Exception:
+        incoming = []
+    if not incoming:
+        return err("Adjunta al menos un archivo en el campo 'files'", 400)
+
+    import mimetypes
+    uploaded, failed = [], []
+    try:
+        svc = get_blob_service()
+        prefix = f"{_media_root(section)}/{folder}/"
+        for f in incoming:
+            fname = os.path.basename(getattr(f, "filename", "") or "").strip()
+            if not fname or fname.startswith("."):
+                failed.append({"name": fname or "(sin nombre)", "error": "Nombre inválido"})
+                continue
+            try:
+                data = f.stream.read()
+                ctype = getattr(f, "content_type", None) or mimetypes.guess_type(fname)[0] or "application/octet-stream"
+                bc = svc.get_blob_client(container=CONTAINER, blob=f"{prefix}{fname}")
+                bc.upload_blob(data, overwrite=True, content_type=ctype)
+                uploaded.append(fname)
+            except Exception as exc:
+                failed.append({"name": fname, "error": str(exc)})
+        return ok({"uploaded": uploaded, "failed": failed})
+    except Exception as exc:
+        logging.error("media_upload: %s", exc)
+        return err(str(exc), 500)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # POST /api/index/refresh (manual)
 # ══════════════════════════════════════════════════════════════════════════════
 @app.route(route="index/refresh", methods=["POST", "OPTIONS"])
 def index_refresh(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
-    if not is_authenticated(req):
-        return err("No autorizado", 401)
+    _, auth_err = require_perms(req, admin=True)
+    if auth_err:
+        return auth_err
 
     try:
         stats = refresh_content_indexes()
@@ -1025,8 +1591,9 @@ def index_refresh_timer(timer: func.TimerRequest) -> None:
 def upload(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
-    if not is_authenticated(req):
-        return err("No autorizado", 401)
+    _, auth_err = require_perms(req, admin=True)
+    if auth_err:
+        return auth_err
 
     try:
         body = req.get_json()
@@ -1093,8 +1660,9 @@ def upload(req: func.HttpRequest) -> func.HttpResponse:
 def upload_check(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
-    if not is_authenticated(req):
-        return err("No autorizado", 401)
+    _, auth_err = require_perms(req, admin=True)
+    if auth_err:
+        return auth_err
 
     try:
         body = req.get_json()
@@ -1163,8 +1731,9 @@ def upload_check(req: func.HttpRequest) -> func.HttpResponse:
 def upload_status(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
-    if not is_authenticated(req):
-        return err("No autorizado", 401)
+    _, auth_err = require_perms(req, admin=True)
+    if auth_err:
+        return auth_err
 
     job_id = req.route_params.get("job_id")
     with _upload_jobs_lock:
@@ -1186,8 +1755,9 @@ def upload_status(req: func.HttpRequest) -> func.HttpResponse:
 def upload_sharepoint(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
-    if not is_authenticated(req):
-        return err("No autorizado", 401)
+    _, auth_err = require_perms(req, admin=True)
+    if auth_err:
+        return auth_err
 
     try:
         body = req.get_json()
@@ -1281,8 +1851,9 @@ def upload_sharepoint(req: func.HttpRequest) -> func.HttpResponse:
 def upload_onedrive(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
-    if not is_authenticated(req):
-        return err("No autorizado", 401)
+    _, auth_err = require_perms(req, admin=True)
+    if auth_err:
+        return auth_err
 
     try:
         body = req.get_json()
@@ -1348,6 +1919,143 @@ def upload_onedrive(req: func.HttpRequest) -> func.HttpResponse:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# POST /api/upload/local/plan — planifica subida directa desde el navegador
+#
+# El navegador manda la lista de archivos elegidos (con sus rutas relativas si
+# se eligió una carpeta) y el servidor devuelve, por archivo: la ruta destino
+# (con renombrado PREFIJO_FECHA_SEQ o nombres originales), si ya existe, y un
+# SAS de escritura. Los bytes NUNCA pasan por la Function: van directo del
+# navegador al blob, así los archivos de varias GB no dependen del timeout.
+#
+# Body: { projectCode, projectName, prefijo?, keepNames?, files: [
+#          {name, size, lastModified(ms), relativePath?} ] }
+# ══════════════════════════════════════════════════════════════════════════════
+_LOCAL_PLAN_MAX_FILES = 3000
+
+def _sanitize_rel_segment(seg: str) -> str:
+    seg = "".join(c for c in seg.strip() if c not in '\\#?%*:|"<>').strip(". ")
+    return seg
+
+@app.route(route="upload/local/plan", methods=["POST", "OPTIONS"])
+def upload_local_plan(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_ok()
+    _, auth_err = require_perms(req, admin=True)
+    if auth_err:
+        return auth_err
+
+    try:
+        body = req.get_json()
+    except Exception:
+        return err("Cuerpo JSON inválido", 400)
+
+    project_code = (body.get("projectCode") or "").strip()
+    project_name = (body.get("projectName") or "").strip()
+    prefijo      = (body.get("prefijo") or "FOT").strip().upper()
+    keep_names   = bool(body.get("keepNames"))
+    files_in     = body.get("files") or []
+
+    if not project_code or not project_name:
+        return err("projectCode y projectName son requeridos", 400)
+    if not isinstance(files_in, list) or not files_in:
+        return err("files: lista de archivos requerida", 400)
+    if len(files_in) > _LOCAL_PLAN_MAX_FILES:
+        return err(f"Máximo {_LOCAL_PLAN_MAX_FILES} archivos por tanda", 400)
+
+    try:
+        carpeta = uploader._resolve_carpeta(project_code, project_name)
+        svc = get_blob_service()
+        blob_index = uploader.construir_blob_index(svc, prefix=f"{carpeta}/")
+
+        def fecha_de(entry: Dict[str, Any]) -> datetime:
+            texto = " | ".join(filter(None, [str(entry.get("relativePath") or ""), str(entry.get("name") or "")]))
+            fecha = uploader.extraer_fecha_desde_texto(texto) or uploader.extraer_semana_desde_texto(texto)
+            if fecha:
+                return fecha
+            try:
+                lm = float(entry.get("lastModified") or 0) / 1000.0
+                if lm > 0:
+                    return datetime.fromtimestamp(lm, tz=timezone.utc)
+            except Exception:
+                pass
+            return datetime.now(timezone.utc)
+
+        entries = []
+        for i, f in enumerate(files_in):
+            if not isinstance(f, dict):
+                continue
+            name = os.path.basename(str(f.get("name") or "").strip())
+            if not name or name.startswith("."):
+                continue
+            entries.append({
+                "idx": i,
+                "name": name,
+                "size": int(f.get("size") or 0),
+                "lastModified": f.get("lastModified"),
+                "relativePath": str(f.get("relativePath") or "").strip(),
+                "fecha": fecha_de(f),
+            })
+
+        entries.sort(key=lambda e: (e["fecha"], e["relativePath"], e["name"]))
+
+        contadores: Dict[str, int] = {}
+        planned = []
+        for e in entries:
+            ext = os.path.splitext(e["name"])[1].lower()
+
+            if keep_names:
+                # Modo biblioteca/sin fechas: respeta nombres y estructura de carpetas.
+                rel_dir = "/".join(
+                    s for s in (_sanitize_rel_segment(p) for p in e["relativePath"].split("/")[:-1]) if s
+                ) if e["relativePath"] else ""
+                folder = rel_dir or "General"
+                blob_path = f"{carpeta}/{folder}/{e['name']}"
+                nombre_final = e["name"]
+            else:
+                pref = uploader.detectar_prefijo(e["name"], prefijo)
+                if pref == "SKIP":
+                    planned.append({
+                        "idx": e["idx"], "name": e["name"], "relativePath": e["relativePath"],
+                        "status": "omitido", "reason": "Tipo de archivo excluido (documentos/comprimidos)",
+                        "blobPath": None, "sasUrl": None,
+                    })
+                    continue
+                semana = uploader._numero_semana_iso(e["fecha"])
+                clave = f"{pref}_{e['fecha'].strftime('%Y%m%d')}"
+                contadores[clave] = contadores.get(clave, 0) + 1
+                nombre_final = uploader.renombrar_archivo(e["name"], e["fecha"], contadores[clave], prefijo)
+                blob_path = f"{carpeta}/{semana}/{nombre_final}"
+
+            if blob_path in blob_index:
+                planned.append({
+                    "idx": e["idx"], "name": e["name"], "relativePath": e["relativePath"],
+                    "status": "existe", "blobPath": blob_path, "finalName": nombre_final,
+                    "sasUrl": None,
+                })
+            else:
+                planned.append({
+                    "idx": e["idx"], "name": e["name"], "relativePath": e["relativePath"],
+                    "status": "nuevo", "blobPath": blob_path, "finalName": nombre_final,
+                    "contentType": uploader.content_type_para(nombre_final),
+                    "sasUrl": make_sas_url_write(blob_path, expiry_minutes=360),
+                })
+
+        nuevos = sum(1 for p in planned if p["status"] == "nuevo")
+        return ok({
+            "carpeta": carpeta,
+            "keepNames": keep_names,
+            "total": len(planned),
+            "nuevos": nuevos,
+            "existentes": sum(1 for p in planned if p["status"] == "existe"),
+            "omitidos": sum(1 for p in planned if p["status"] == "omitido"),
+            "files": planned,
+        })
+    except Exception as exc:
+        logging.error("upload_local_plan: %s", exc)
+        return err(str(exc), 500)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # POST /api/upload/resolve-sharepoint
 # Resuelve una URL de SharePoint a site_id + folder_path sin iniciar la subida
 # Body: { url }
@@ -1356,8 +2064,9 @@ def upload_onedrive(req: func.HttpRequest) -> func.HttpResponse:
 def upload_resolve_sharepoint(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
-    if not is_authenticated(req):
-        return err("No autorizado", 401)
+    _, auth_err = require_perms(req, admin=True)
+    if auth_err:
+        return auth_err
 
     try:
         body = req.get_json()

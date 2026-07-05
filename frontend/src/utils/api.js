@@ -78,8 +78,21 @@ async function apiFetchBlob(path, options = {}) {
   return res.blob()
 }
 
+async function apiFetchForm(path, formData) {
+  const token = await getToken().catch(() => null)
+  const headers = {}
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  // Sin Content-Type manual: el navegador arma el boundary del multipart
+  const res = await fetch(path, { method: 'POST', body: formData, headers })
+  if (!res.ok) throw new Error(`API ${path} → ${res.status}`)
+  return res.json()
+}
+
 
 export const api = {
+  getMe:            ()           => apiFetch('/api/me'),
+  getAccessConfig:  ()           => apiFetch('/api/access'),
+  saveAccessConfig: (config)     => apiFetch('/api/access', { method: 'POST', body: JSON.stringify(config) }),
   getProjects:      ()           => apiFetch('/api/projects', {}, 'projects'),
   getWeeks:         (id)         => apiFetch(`/api/projects/${id}/weeks`, {}, `weeks:${id}`),
   getBrowse:        (id, path = '') => {
@@ -97,14 +110,26 @@ export const api = {
   },
   getSasUrl:        (blobPath, minutes = 60) =>
     apiFetch('/api/sas/generate', { method: 'POST', body: JSON.stringify({ blobPath, expiryMinutes: minutes }) }),
-  getThumbBlob:     (blobPath, width = 480, quality = 72) =>
-    apiFetchBlob(`/api/thumb?blobPath=${encodeURIComponent(blobPath)}&w=${width}&q=${quality}`),
+  getThumbBlob:     (blobPath, width = 480, quality = 72, mode = '') =>
+    apiFetchBlob(`/api/thumb?blobPath=${encodeURIComponent(blobPath)}&w=${width}&q=${quality}${mode ? `&mode=${mode}` : ''}`),
+
+  // ── Biblioteca de media (_media/<seccion>/<carpeta>) ──────────────────────
+  listMediaFolders: (section) => apiFetch(`/api/media/${section}`),
+  getMediaFolder:   (section, folder) => apiFetch(`/api/media/${section}/${encodeURIComponent(folder)}`),
+  createMediaFolder:(section, name) =>
+    apiFetch(`/api/media/${section}`, { method: 'POST', body: JSON.stringify({ name }) }),
+  uploadMediaFiles: (section, folder, files) => {
+    const fd = new FormData()
+    Array.from(files).forEach(f => fd.append('files', f))
+    return apiFetchForm(`/api/media/${section}/${encodeURIComponent(folder)}/upload`, fd)
+  },
   createShare:      (projectId, week, expiryDays) =>
     apiFetch('/api/share/create', { method: 'POST', body: JSON.stringify({ projectId, week, expiryDays }) }),
   listShares:       ()           => apiFetch('/api/share/list'),
   revokeShare:      (token)      => apiFetch(`/api/share/${token}`, { method: 'DELETE' }),
   resolveShare:     (token)      => apiFetch(`/api/share/${token}`),
   postUpload:       (payload)    => apiFetch('/api/upload', { method: 'POST', body: JSON.stringify(payload) }),
+  postUploadLocalPlan: (payload) => apiFetch('/api/upload/local/plan', { method: 'POST', body: JSON.stringify(payload) }),
   postUploadCheck:  (payload)    => apiFetch('/api/upload/check', { method: 'POST', body: JSON.stringify(payload) }),
   getUploadStatus:  (jobId)      => apiFetch(`/api/upload/status/${jobId}`),
   getProjectSettings:   (projectCode) =>

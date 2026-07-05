@@ -7,3 +7,8 @@ __pycache__/
 .python_packages/
 .funcignore
 local.settings.json
+
+# Herramientas de desarrollo y estado local (no forman parte del despliegue)
+frontend/.shots/
+.impeccable/
+a.py

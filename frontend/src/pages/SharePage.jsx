@@ -197,7 +197,7 @@ export default function SharePage() {
                   }
                 }}
               >
-                ⬇ Descargar
+                Descargar
               </button>
             </div>
 

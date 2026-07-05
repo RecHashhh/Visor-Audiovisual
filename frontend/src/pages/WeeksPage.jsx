@@ -27,7 +27,7 @@ export default function WeeksPage() {
   return (
     <>
       <div className="breadcrumb">
-        <Link to="/">Proyectos</Link>
+        <Link to="/proyectos">Proyectos</Link>
         <span className="sep">›</span>
         <span className="current">{project?.name || id}</span>
       </div>
@@ -50,7 +50,7 @@ export default function WeeksPage() {
       {loading && <div className="loading"><div className="spinner"/></div>}
       {!loading && browse.folders.length === 0 && browse.files.length === 0 && (
         <div className="empty">
-          <div className="empty-icon">📅</div>
+          
           <div className="empty-text">Sin carpetas registradas en BLOB</div>
         </div>
       )}
@@ -58,7 +58,7 @@ export default function WeeksPage() {
       {!loading && (browse.folders.length > 0 || browse.files.length > 0) && (
         <div className="week-list">
           {browse.folders.map(folder => (
-            <div key={folder.path} className="week-row" onClick={() => nav(`/project/${id}/week/${encodeURIComponent(folder.path)}`)}>
+            <div key={folder.path} className="week-row" onClick={() => nav(`/proyectos/project/${id}/week/${encodeURIComponent(folder.path)}`)}>
               <div className="week-label">{folder.name}</div>
               <div className="week-badges">
                 {(folder.types || []).map(t => (

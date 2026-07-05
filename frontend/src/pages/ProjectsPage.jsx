@@ -2,15 +2,16 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../utils/api'
+import { fetchThumb } from '../utils/thumbs'
 
 const PREFIX_COLORS = {
   DRN: 'badge-orange', FOT: 'badge-blue', VID: 'badge-red',
   E360: 'badge-accent', I360: 'badge-dim',
 }
 const STATUS_INFO = {
-  completo:  { cls: 'badge-green',  label: '✅ Completo' },
-  subiendo:  { cls: 'badge-orange', label: '⏳ Subiendo' },
-  pendiente: { cls: 'badge-red',    label: '🔴 Pendiente' },
+  completo:  { cls: 'badge-green',  label: 'Completo' },
+  subiendo:  { cls: 'badge-orange', label: 'Subiendo' },
+  pendiente: { cls: 'badge-red',    label: 'Pendiente' },
 }
 
 function statusInfo(s = '') {
@@ -19,6 +20,7 @@ function statusInfo(s = '') {
   if (sl.includes('subiendo') || sl.includes('uploading')) return STATUS_INFO.subiendo
   return STATUS_INFO.pendiente
 }
+
 
 export default function ProjectsPage() {
   const [projects, setProjects] = useState([])
@@ -98,26 +100,26 @@ export default function ProjectsPage() {
   return (
     <>
       <div className="page-header">
-        <h1 className="page-title">Proyectos <span>Audiovisuales</span></h1>
-        <p className="page-sub">Azure Blob Storage · container audiovisual</p>
+        <h1 className="page-title">Proyectos</h1>
+        <p className="page-sub">Todo el material audiovisual de cada obra, organizado por proyecto y semana</p>
       </div>
 
       <div className="stats-bar">
         <div className="stat-box">
           <div className="stat-num">{counts.all}</div>
-          <div className="stat-lbl">Total proyectos</div>
+          <div className="stat-lbl">Proyectos</div>
         </div>
         <div className="stat-box">
           <div className="stat-num" style={{ color: 'var(--green)' }}>{counts.done}</div>
-          <div className="stat-lbl">En BLOB ✅</div>
+          <div className="stat-lbl">Completos</div>
         </div>
         <div className="stat-box">
           <div className="stat-num" style={{ color: 'var(--orange)' }}>{counts.uploading}</div>
-          <div className="stat-lbl">Subiendo ⏳</div>
+          <div className="stat-lbl">Subiendo</div>
         </div>
         <div className="stat-box">
           <div className="stat-num" style={{ color: 'var(--red)' }}>{counts.pending}</div>
-          <div className="stat-lbl" title={pendingNames || 'No hay proyectos pendientes'}>Pendientes 🔴</div>
+          <div className="stat-lbl" title={pendingNames || 'No hay proyectos pendientes'}>Pendientes</div>
         </div>
         <div className="index-refresh-box">
           <button
@@ -146,9 +148,9 @@ export default function ProjectsPage() {
         />
         {[
           { key: 'all',      label: `Todos (${counts.all})` },
-          { key: 'done',     label: `✅ En BLOB (${counts.done})` },
-          { key: 'uploading',label: `⏳ Subiendo (${counts.uploading})` },
-          { key: 'pending',  label: `🔴 Pendiente (${counts.pending})` },
+          { key: 'done',     label: `Completos (${counts.done})` },
+          { key: 'uploading',label: `Subiendo (${counts.uploading})` },
+          { key: 'pending',  label: `Pendientes (${counts.pending})` },
         ].map(f => (
           <button key={f.key} className={`filter-chip ${filter === f.key ? 'active' : ''}`}
             title={f.key === 'pending' ? (pendingNames || 'No hay proyectos pendientes') : undefined}
@@ -158,14 +160,24 @@ export default function ProjectsPage() {
         ))}
       </div>
 
-      {loading && <div className="loading"><div className="spinner" /><span>Cargando proyectos...</span></div>}
-      {error   && <div className="loading" style={{ color: 'var(--red)' }}>⚠ {error}</div>}
+      {loading && (
+        <div className="project-grid" aria-hidden="true">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="project-card-skel">
+              <div className="skel skel-cover" />
+              <div className="skel skel-line" style={{ width: '38%' }} />
+              <div className="skel skel-line" style={{ width: '72%' }} />
+            </div>
+          ))}
+        </div>
+      )}
+      {error   && <div className="alert alert-error" role="alert">No se pudieron cargar los proyectos: {error}</div>}
 
       {!loading && !error && (
         filtered.length === 0
-          ? <div className="empty"><div className="empty-icon">📂</div><div className="empty-text">Sin resultados</div></div>
+          ? <div className="empty"><div className="empty-text">Sin resultados</div></div>
           : <div className="project-grid">
-              {filtered.map(p => <ProjectCard key={p.code} project={p} onClick={() => nav(`/project/${p.code}`)} />)}
+              {filtered.map(p => <ProjectCard key={p.code} project={p} onClick={() => nav(`/proyectos/project/${p.code}`)} />)}
             </div>
       )}
     </>
@@ -175,17 +187,43 @@ export default function ProjectsPage() {
 function ProjectCard({ project: p, onClick }) {
   const si = statusInfo(p.status)
   const types = (p.types || '').split('+').filter(Boolean)
+  const [cover, setCover] = useState(null)
+  const [coverLoaded, setCoverLoaded] = useState(false)
+
+  useEffect(() => {
+    if (!p.coverPath) return
+    let alive = true
+    fetchThumb(p.coverPath, { w: 480, q: 62 })
+      .then(url => { if (alive) setCover(url) })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [p.coverPath])
 
   return (
     <div className="project-card" onClick={onClick}>
-      <div className="project-card-code">{p.code}</div>
-      <div className="project-card-name">{p.name}</div>
-      <div className="project-card-meta">
-        <span className={`badge ${si.cls}`}>{si.label}</span>
-        {types.map(t => (
-          <span key={t} className={`badge ${PREFIX_COLORS[t] || 'badge-dim'}`}>{t}</span>
-        ))}
-        {p.weeks > 0 && <span className="badge badge-dim">{p.weeks}w</span>}
+      {p.coverPath && (
+        <div className="project-card-cover">
+          {cover && (
+            <img
+              className={`img-fade ${coverLoaded ? 'is-loaded' : ''}`}
+              src={cover}
+              alt={`Portada de ${p.name || p.code}`}
+              loading="lazy"
+              onLoad={() => setCoverLoaded(true)}
+            />
+          )}
+        </div>
+      )}
+      <div className="project-card-body">
+        <div className="project-card-code">{p.code}</div>
+        <div className="project-card-name">{p.name}</div>
+        <div className="project-card-meta">
+          <span className={`badge ${si.cls}`}>{si.label}</span>
+          {types.map(t => (
+            <span key={t} className={`badge ${PREFIX_COLORS[t] || 'badge-dim'}`}>{t}</span>
+          ))}
+          {p.weeks > 0 && <span className="badge badge-dim">{p.weeks}w</span>}
+        </div>
       </div>
     </div>
   )

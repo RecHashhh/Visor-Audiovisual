@@ -28,16 +28,18 @@ export default function LoginPage() {
   return (
     <div className="login-screen">
       <div className="login-card">
-        <div className="login-logo">VISOR</div>
-        <div style={{
-          fontSize: '0.65rem', letterSpacing: '0.2em',
-          color: 'var(--text-dim)', marginBottom: '4px',
-          fontFamily: 'var(--font-mono)'
-        }}>
-          AUDIOVISUAL · AZURE BLOB STORAGE
-        </div>
+        <img
+          className="login-logo-img only-light"
+          src="/brands/ripconciv/thumbs/horizontal-positivo-azul.png"
+          alt="RIPCONCIV"
+        />
+        <img
+          className="login-logo-img only-dark"
+          src="/brands/ripconciv/wordmark-white.png"
+          alt="RIPCONCIV"
+        />
         <div className="login-subtitle">
-          Plataforma de visualización de proyectos audiovisuales
+          Hub Audiovisual — material de obra, marcas y contenido de la empresa
         </div>
 
         <button

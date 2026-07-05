@@ -3,7 +3,23 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Visor Audiovisual</title>
+    <title>RIPCON · Hub Audiovisual</title>
+    <link rel="icon" type="image/png" href="/brands/ripconciv/favicon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/brands/ripconciv/favicon.png" />
+    <meta name="theme-color" content="#192d96" />
+    <!-- Aplica el tema antes del primer paint para evitar flash claro/oscuro -->
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem('ripcon-theme')
+          if (t !== 'light' && t !== 'dark') {
+            t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+          }
+          document.documentElement.setAttribute('data-theme', t)
+        } catch (e) { /* sin tema explícito: queda claro */ }
+      })()
+    </script>
     <!-- 
       __APP_CONFIG__ se reemplaza en el build por el workflow de GitHub Actions.
       En desarrollo local, las variables vienen de .env.local
@@ -17,7 +33,7 @@
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
   </head>
   <body>
     <div id="root"></div>

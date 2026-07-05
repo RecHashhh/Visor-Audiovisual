@@ -41,6 +41,7 @@ import msal
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from azure.core.exceptions import ResourceExistsError
 from azure.storage.blob import (
     BlobServiceClient,
     ContentSettings,
@@ -181,6 +182,23 @@ def _get_http_session() -> requests.Session:
         _http_local.session = session
     return session
 
+def _resolve_carpeta(project_code: str, project_name: str) -> str:
+    code = (project_code or "").strip()
+    slug = _slugify_name(project_name)
+
+    if not code:
+        return slug
+
+    code_lower = code.lower()
+    slug_lower = slug.lower()
+
+    if code_lower == slug_lower:
+        return code
+
+    if code_lower.endswith(f"_{slug_lower}"):
+        return code
+
+    return f"{code}_{slug}"
 
 def _with_retry(fn: Callable, max_retries: int = GRAPH_MAX_RETRIES):
     last_error = None
@@ -670,13 +688,20 @@ def _procesar_un_trabajo(
                 progress_cb(idx, "uploading", {"name": trabajo["nombre_nuevo"], "size": actual_size})
 
             t_ul_ini = time.perf_counter()
-            _subir_a_blob_desde_path(
-                blob_svc,
-                tmp_path,
-                trabajo["blob_path"],
-                content_type=content_type_para(trabajo["nombre_nuevo"]),
-                max_concurrency=upload_concurrency,
-            )
+            try:
+                _subir_a_blob_desde_path(
+                    blob_svc,
+                    tmp_path,
+                    trabajo["blob_path"],
+                    content_type=content_type_para(trabajo["nombre_nuevo"]),
+                    max_concurrency=upload_concurrency,
+                )
+            except ResourceExistsError:
+                # Carrera con otra subida simultánea: ya existe, es un skip, no un error
+                log.info("  ⏭️  Ya existía (carrera): %s", trabajo["blob_path"])
+                if progress_cb:
+                    progress_cb(idx, "skipped", {"name": trabajo["nombre_nuevo"], "blob": trabajo["blob_path"]})
+                return "skipped", trabajo["blob_path"]
             t_ul = time.perf_counter() - t_ul_ini
             t_total = time.perf_counter() - t0
 
@@ -728,7 +753,10 @@ def procesar_archivos(
     Motor principal. Construye blob index una vez, separa livianos vs pesados,
     procesa en paralelo con semáforo para no saturar Graph API.
     """
-    carpeta_proyecto = f"{codigo_proyecto}_{nombre_corto}"
+    carpeta_proyecto = _resolve_carpeta(
+        codigo_proyecto,
+        nombre_corto
+    )
     resumen = {
         "subidos": 0, "omitidos": 0, "errores": 0,
         "bytes_subidos": 0, "archivos_medidos": 0,
@@ -793,6 +821,8 @@ def procesar_archivos(
                     eff_mbps_sum += pl.get("eff_mbps", 0.0)
                     resumen["archivos_medidos"] += 1
                     log.info("  ✅  Subido: %s", futures[future]["blob_path"])
+                elif estado == "skipped":
+                    resumen["omitidos"] += 1
                 else:
                     resumen["errores"] += 1
                     log.error("  ❌  Error con %s: %s", futures[future]["nombre_orig"], payload)
@@ -1002,6 +1032,53 @@ def _resolve_download_url(url: str) -> Tuple[str, str]:
     return url, _guess_filename_from_url(url)
 
 
+def _download_stream_to_tempfile(
+    download_url: str,
+    name: str,
+    tmp_path: str,
+    progress_cb: Optional[Callable] = None,
+    idx: int = -1,
+) -> Tuple[str, str, int]:
+    """Descarga con streaming a tempfile, con reintentos completos ante cortes
+    de red (crítico en archivos de varias GB)."""
+    headers = _download_request_headers(download_url)
+    last_exc: Optional[Exception] = None
+
+    for attempt in range(1, GRAPH_DOWNLOAD_RETRIES + 1):
+        downloaded = 0
+        try:
+            with _get_http_session().get(
+                download_url, stream=True, headers=headers,
+                timeout=(GRAPH_CONNECT_TIMEOUT, GRAPH_DOWNLOAD_READ_TIMEOUT),
+            ) as resp:
+                resp.raise_for_status()
+                total = int(resp.headers.get("Content-Length") or 0)
+                if progress_cb:
+                    progress_cb(idx, "downloading", {"name": name, "total": total, "downloaded": 0})
+                with open(tmp_path, "wb") as fh:
+                    for chunk in resp.iter_content(chunk_size=CHUNK_SIZE):
+                        if chunk:
+                            fh.write(chunk)
+                            downloaded += len(chunk)
+                            if progress_cb:
+                                progress_cb(idx, "downloading", {"name": name, "total": total, "downloaded": downloaded})
+            return name, content_type_para(name), downloaded
+        except (
+            requests.exceptions.Timeout,
+            requests.exceptions.ConnectionError,
+            requests.exceptions.ChunkedEncodingError,
+        ) as e:
+            last_exc = e
+            if attempt == GRAPH_DOWNLOAD_RETRIES:
+                break
+            wait = GRAPH_RETRY_BACKOFF ** attempt
+            log.warning("Descarga interrumpida (%s). Reintento %s/%s en %ss",
+                        name, attempt, GRAPH_DOWNLOAD_RETRIES, wait)
+            time.sleep(wait)
+
+    raise RuntimeError(f"Descarga falló tras {GRAPH_DOWNLOAD_RETRIES} intentos: {last_exc}")
+
+
 def _download_url_to_tempfile(
     url: str,
     tmp_path: str,
@@ -1009,25 +1086,7 @@ def _download_url_to_tempfile(
     idx: int = -1,
 ) -> Tuple[str, str, int]:
     download_url, name = _resolve_download_url(url)
-    headers = _download_request_headers(download_url)
-    total = 0
-    downloaded = 0
-
-    with requests.Session() as sess:
-        with sess.get(download_url, stream=True, timeout=120, headers=headers) as resp:
-            resp.raise_for_status()
-            total = int(resp.headers.get("Content-Length") or 0)
-            if progress_cb:
-                progress_cb(idx, "downloading", {"name": name, "total": total, "downloaded": 0})
-            with open(tmp_path, "wb") as fh:
-                for chunk in resp.iter_content(chunk_size=CHUNK_SIZE):
-                    if chunk:
-                        fh.write(chunk)
-                        downloaded += len(chunk)
-                        if progress_cb:
-                            progress_cb(idx, "downloading", {"name": name, "total": total, "downloaded": downloaded})
-
-    return name, content_type_para(name), downloaded
+    return _download_stream_to_tempfile(download_url, name, tmp_path, progress_cb, idx)
 
 
 def _upload_file_in_blocks(
@@ -1050,7 +1109,18 @@ def _upload_file_in_blocks(
             if not chunk:
                 break
             block_id = base64.b64encode(f"{block_index:08d}".encode()).decode()
-            blob_client.stage_block(block_id=block_id, data=chunk)
+            # Reintento por bloque: un corte de red no tira la subida completa
+            for attempt in range(1, 4):
+                try:
+                    blob_client.stage_block(block_id=block_id, data=chunk)
+                    break
+                except Exception as e:
+                    if attempt == 3:
+                        raise
+                    wait = GRAPH_RETRY_BACKOFF ** attempt
+                    log.warning("stage_block falló (bloque %s). Reintento %s/3 en %ss: %s",
+                                block_index, attempt, wait, e)
+                    time.sleep(wait)
             block_ids.append(block_id)
             uploaded += len(chunk)
             block_index += 1
@@ -1072,9 +1142,8 @@ def upload_urls(
     max_workers: int = 4,
 ) -> Dict[str, Any]:
     """Descarga cada URL y la sube al container. Retorna resumen."""
-    slug = _slugify_name(project_name)
     week = _week_iso_for_date()
-    carpeta = f"{project_code}_{slug}"
+    carpeta = _resolve_carpeta(project_code, project_name)
 
     results: Dict[str, Any] = {"uploaded": 0, "skipped": 0, "errors": [], "details": []}
 
@@ -1084,14 +1153,14 @@ def upload_urls(
     def _worker(url: str) -> Dict[str, Any]:
         tmp_path = None
         try:
-            name = _resolve_download_url(url)[1]
+            download_url, name = _resolve_download_url(url)
             blob_path = f"{carpeta}/{week}/{name}"
             if blob_path in blob_index:
                 return {"url": url, "ok": False, "skipped": True, "blob": blob_path}
 
             with tempfile.NamedTemporaryFile(delete=False) as tmpf:
                 tmp_path = tmpf.name
-            name, ct, downloaded = _download_url_to_tempfile(url, tmp_path)
+            name, ct, downloaded = _download_stream_to_tempfile(download_url, name, tmp_path)
             _upload_file_in_blocks(container, blob_path, tmp_path, ct)
             return {"url": url, "ok": True, "blob": blob_path, "size": downloaded}
         except Exception as e:
@@ -1135,9 +1204,8 @@ def upload_urls_with_progress(
     progress_cb(file_index: int, event: str, payload: dict)
     Eventos: 'queued', 'downloading', 'downloaded', 'uploading', 'uploaded', 'error', 'finished'
     """
-    slug = _slugify_name(project_name)
     week = _week_iso_for_date()
-    carpeta = f"{project_code}_{slug}"
+    carpeta = _resolve_carpeta(project_code, project_name)
 
     results: Dict[str, Any] = {"uploaded": 0, "skipped": 0, "errors": [], "details": []}
 
@@ -1146,18 +1214,21 @@ def upload_urls_with_progress(
 
     def _worker(idx: int, url: str) -> Dict[str, Any]:
         progress_cb(idx, "queued", {"url": url})
-        name = _resolve_download_url(url)[1]
+        name = _guess_filename_from_url(url)
         tmp_path = None
         try:
-            with tempfile.NamedTemporaryFile(delete=False) as tmpf:
-                tmp_path = tmpf.name
-            name, ct, downloaded = _download_url_to_tempfile(url, tmp_path, progress_cb, idx)
-            progress_cb(idx, "downloaded", {"name": name, "size": downloaded})
-
+            # Resolver UNA sola vez (nombre + URL real de descarga) y verificar
+            # existencia ANTES de descargar: no bajamos gigas para luego omitir.
+            download_url, name = _resolve_download_url(url)
             blob_path = f"{carpeta}/{week}/{name}"
             if blob_path in blob_index:
                 progress_cb(idx, "skipped", {"name": name, "blob": blob_path})
                 return {"url": url, "ok": False, "skipped": True, "blob": blob_path}
+
+            with tempfile.NamedTemporaryFile(delete=False) as tmpf:
+                tmp_path = tmpf.name
+            name, ct, downloaded = _download_stream_to_tempfile(download_url, name, tmp_path, progress_cb, idx)
+            progress_cb(idx, "downloaded", {"name": name, "size": downloaded})
 
             progress_cb(idx, "uploading", {"name": name, "size": downloaded})
             _upload_file_in_blocks(container, blob_path, tmp_path, ct, progress_cb, idx)
@@ -1183,9 +1254,10 @@ def upload_urls_with_progress(
             results["details"].append(res)
             if res.get("ok"):
                 results["uploaded"] += 1
+            elif res.get("skipped"):
+                results["skipped"] += 1
             else:
                 results["errors"].append(res)
 
-    results["skipped"] = len(results["errors"]) and 0  # ya contado en details
     progress_cb(-1, "finished", {"summary": results})
     return results
