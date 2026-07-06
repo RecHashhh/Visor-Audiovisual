@@ -42,9 +42,9 @@
   --shadow:       0 1px 2px rgba(20,22,40,0.04), 0 2px 8px rgba(20,22,40,0.06);
   --shadow-lg:    0 12px 32px rgba(20,22,40,0.12);
   --transition:   0.15s ease;
-  --z-sidebar-mobile: 90;
   --z-topbar:         100;
   --z-backdrop:       110;
+  --z-sidebar-mobile: 120;  /* SOBRE el backdrop: el menú debe recibir los toques */
   --z-lightbox:       1000;
 }
 
@@ -2002,40 +2002,41 @@ code { font-family: var(--font-mono); background: var(--bg3); padding: 2px 6px; 
 .media-open img { transition: transform var(--transition); }
 .media-open:hover img { transform: scale(1.04); }
 
-/* ── Visor grande (lightbox) ─────────────────────────────── */
-.lightbox {
-  position: fixed; inset: 0; z-index: 100;
+/* ── Visor grande de biblioteca (media lightbox) ─────────── */
+/* Clases con prefijo propio para no chocar con el lightbox de GalleryPage. */
+.media-lightbox {
+  position: fixed; inset: 0; z-index: var(--z-lightbox);
   background: rgba(10, 12, 18, 0.88);
   display: flex; align-items: center; justify-content: center;
   padding: 4vh 5vw;
   backdrop-filter: blur(2px);
 }
-.lightbox-stage { margin: 0; max-width: 100%; max-height: 100%; display: flex; flex-direction: column; gap: 12px; align-items: center; }
-.lightbox-img-wrap { display: flex; align-items: center; justify-content: center; min-height: 40vh; }
-.lightbox-img-wrap img { max-width: 84vw; max-height: 80vh; object-fit: contain; border-radius: 8px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5); }
-.lightbox-caption { display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center; color: #eef1f7; }
-.lightbox-name { font-size: 0.9rem; font-weight: 600; }
-.lightbox-meta { display: flex; align-items: center; gap: 12px; font-size: 0.8rem; color: #aeb6c6; }
-.lightbox-download { background: none; border: 0; color: #8ab4ff; cursor: pointer; font: inherit; text-decoration: underline; padding: 0; }
-.lightbox-close {
+.media-lightbox-stage { margin: 0; max-width: 100%; max-height: 100%; display: flex; flex-direction: column; gap: 12px; align-items: center; }
+.media-lightbox-img { display: flex; align-items: center; justify-content: center; min-height: 40vh; }
+.media-lightbox-img img { max-width: 84vw; max-height: 80vh; object-fit: contain; border-radius: 8px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5); }
+.media-lightbox-caption { display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center; color: #eef1f7; }
+.media-lightbox-name { font-size: 0.9rem; font-weight: 600; }
+.media-lightbox-meta { display: flex; align-items: center; gap: 12px; font-size: 0.8rem; color: #aeb6c6; }
+.media-lightbox-download { background: none; border: 0; color: #8ab4ff; cursor: pointer; font: inherit; text-decoration: underline; padding: 0; }
+.media-lightbox-close {
   position: absolute; top: 16px; right: 20px;
   width: 40px; height: 40px; border-radius: 50%;
   background: rgba(255, 255, 255, 0.12); border: 0; color: #fff;
   font-size: 1.6rem; line-height: 1; cursor: pointer;
 }
-.lightbox-close:hover { background: rgba(255, 255, 255, 0.24); }
-.lightbox-nav {
+.media-lightbox-close:hover { background: rgba(255, 255, 255, 0.24); }
+.media-lightbox-nav {
   position: absolute; top: 50%; transform: translateY(-50%);
   width: 52px; height: 52px; border-radius: 50%;
   background: rgba(255, 255, 255, 0.12); border: 0; color: #fff;
   font-size: 2rem; line-height: 1; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
 }
-.lightbox-nav:hover:not(:disabled) { background: rgba(255, 255, 255, 0.24); }
-.lightbox-nav:disabled { opacity: 0.22; cursor: default; }
-.lightbox-nav.prev { left: 16px; }
-.lightbox-nav.next { right: 16px; }
-.lightbox-counter { position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%); font-size: 0.8rem; color: #aeb6c6; }
+.media-lightbox-nav:hover:not(:disabled) { background: rgba(255, 255, 255, 0.24); }
+.media-lightbox-nav:disabled { opacity: 0.22; cursor: default; }
+.media-lightbox-nav.prev { left: 16px; }
+.media-lightbox-nav.next { right: 16px; }
+.media-lightbox-counter { position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%); font-size: 0.8rem; color: #aeb6c6; }
 
 /* ── RESPONSIVE ─────────────────────────────────────────── */
 @media (max-width: 900px) {

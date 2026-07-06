@@ -278,27 +278,27 @@ function Lightbox({ images, index, onClose, onMove }) {
   const hasPrev = index > 0
   const hasNext = index < images.length - 1
   return (
-    <div className="lightbox" onClick={onClose} role="dialog" aria-modal="true" aria-label={name}>
-      <button className="lightbox-close" onClick={onClose} aria-label="Cerrar (Esc)">×</button>
-      <button className="lightbox-nav prev" onClick={e => { e.stopPropagation(); onMove(-1) }}
+    <div className="media-lightbox" onClick={onClose} role="dialog" aria-modal="true" aria-label={name}>
+      <button className="media-lightbox-close" onClick={onClose} aria-label="Cerrar (Esc)">×</button>
+      <button className="media-lightbox-nav prev" onClick={e => { e.stopPropagation(); onMove(-1) }}
         disabled={!hasPrev} aria-label="Anterior (←)">‹</button>
-      <figure className="lightbox-stage" onClick={e => e.stopPropagation()}>
-        <div className="lightbox-img-wrap">
+      <figure className="media-lightbox-stage" onClick={e => e.stopPropagation()}>
+        <div className="media-lightbox-img">
           {src ? <img src={src} alt={name} /> : <div className="spinner" />}
         </div>
-        <figcaption className="lightbox-caption">
-          <span className="lightbox-name">{name}</span>
-          <span className="lightbox-meta">
+        <figcaption className="media-lightbox-caption">
+          <span className="media-lightbox-name">{name}</span>
+          <span className="media-lightbox-meta">
             {img.lastModified && <span>Subido el {fmtDate(img.lastModified)}</span>}
-            <button className="lightbox-download" onClick={() => downloadFile(img.path, name).catch(() => {})}>
+            <button className="media-lightbox-download" onClick={() => downloadFile(img.path, name).catch(() => {})}>
               Descargar original
             </button>
           </span>
         </figcaption>
       </figure>
-      <button className="lightbox-nav next" onClick={e => { e.stopPropagation(); onMove(1) }}
+      <button className="media-lightbox-nav next" onClick={e => { e.stopPropagation(); onMove(1) }}
         disabled={!hasNext} aria-label="Siguiente (→)">›</button>
-      <div className="lightbox-counter">{index + 1} / {images.length}</div>
+      <div className="media-lightbox-counter">{index + 1} / {images.length}</div>
     </div>
   )
 }
