@@ -603,6 +603,7 @@ function HtmlPreview({ file: f }) {
   const name = f.name.split('/').pop()
   const [html, setHtml] = useState(null)
   const [failed, setFailed] = useState(false)
+  const frameRef = useRef(null)
   useEffect(() => {
     let alive = true
     ;(async () => {
@@ -616,6 +617,20 @@ function HtmlPreview({ file: f }) {
     })()
     return () => { alive = false }
   }, [f.path])
+  // Ajusta la altura del iframe al contenido para que la firma se vea COMPLETA
+  // (sin scroll). Se remide tras cargar por si el logo tarda en llegar.
+  function fit() {
+    const el = frameRef.current
+    if (!el) return
+    try {
+      const doc = el.contentDocument
+      if (doc && doc.body) {
+        const h = Math.max(doc.body.scrollHeight, doc.documentElement.scrollHeight)
+        if (h) el.style.height = `${h + 8}px`
+      }
+    } catch { /* origen opaco: se deja la altura por defecto */ }
+  }
+  function onFrameLoad() { fit(); setTimeout(fit, 400); setTimeout(fit, 1200) }
   return (
     <div className="html-card">
       <div className="html-card-head">
@@ -629,7 +644,7 @@ function HtmlPreview({ file: f }) {
           ? <p className="typo-fail">No se pudo cargar la vista previa. Puedes descargar el archivo.</p>
           : html === null
             ? <div className="spinner" />
-            : <iframe className="html-frame" sandbox="" srcDoc={html} title={name} />}
+            : <iframe ref={frameRef} className="html-frame" sandbox="allow-same-origin" srcDoc={html} title={name} onLoad={onFrameLoad} />}
       </div>
     </div>
   )

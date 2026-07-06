@@ -2059,12 +2059,12 @@ code { font-family: var(--font-mono); background: var(--bg3); padding: 2px 6px; 
 
 /* Firmas / vista previa de HTML */
 .html-section { margin: 8px 0 28px; }
-.html-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; margin-top: 12px; }
+.html-grid { display: grid; grid-template-columns: 1fr; gap: 14px; margin-top: 12px; max-width: 780px; }
 .html-card { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg2); overflow: hidden; }
 .html-card-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
 .html-card-head .media-img-name { flex: 1; }
-.html-frame-wrap { display: flex; align-items: center; justify-content: center; min-height: 180px; padding: 14px; background: #ffffff; }
-.html-frame { width: 100%; min-height: 200px; border: 0; background: #ffffff; }
+.html-frame-wrap { padding: 18px; background: #ffffff; overflow: auto; }
+.html-frame { width: 100%; min-height: 120px; border: 0; background: #ffffff; display: block; }
 
 /* Paleta de colores de la marca (solo en Marcas) */
 .brand-colors { margin: 8px 0 28px; }
