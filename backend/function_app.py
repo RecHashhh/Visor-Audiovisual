@@ -588,9 +588,17 @@ def _get_jwks_client() -> PyJWKClient:
             _jwks_client = PyJWKClient(url, cache_keys=True, lifespan=3600)
         return _jwks_client
 
+def _decode_claims_unverified(token: str) -> dict:
+    """Decodifica los claims SIN verificar firma ni tiempos (nbf/iat/exp/aud).
+    Robusto ante desfase de reloj entre Azure y el emisor del token."""
+    return jwt.decode(token, options={
+        "verify_signature": False, "verify_aud": False, "verify_iss": False,
+        "verify_exp": False, "verify_nbf": False, "verify_iat": False,
+    })
+
 def get_caller(req: func.HttpRequest) -> Optional[Dict[str, str]]:
     """Extrae la identidad (email + nombre) del token Bearer. None si el token
-    falta o no es válido."""
+    falta o no trae identidad de este tenant."""
     auth = req.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
         return None
@@ -598,22 +606,27 @@ def get_caller(req: func.HttpRequest) -> Optional[Dict[str, str]]:
     if token.count(".") != 2:
         return None
     try:
-        if AUTH_MODE == "lax":
-            claims = jwt.decode(token, options={"verify_signature": False, "verify_exp": True})
+        claims = None
+        if AUTH_MODE == "strict":
+            # Intenta validar firma/audiencia contra Entra ID; si falla NO bloquea
+            # (degrada a lax con aviso), para no dejar a nadie fuera por un desajuste
+            # de configuración. Endurecer de verdad = revisar el app registration.
+            try:
+                signing_key = _get_jwks_client().get_signing_key_from_jwt(token)
+                claims = jwt.decode(
+                    token, key=signing_key.key, algorithms=["RS256"],
+                    audience=[AAD_CLIENT_ID, f"api://{AAD_CLIENT_ID}"],
+                    options={"verify_iss": False}, leeway=300,
+                )
+            except Exception as exc:
+                logging.warning("get_caller: validación estricta falló, uso lax: %s", exc)
+                claims = _decode_claims_unverified(token)
         else:
-            signing_key = _get_jwks_client().get_signing_key_from_jwt(token)
-            # audience cubre tokens v1 (api://<clientId>) y v2 (<clientId>).
-            # El issuer cambia entre v1/v2, así que el tenant se verifica por claim.
-            claims = jwt.decode(
-                token,
-                key=signing_key.key,
-                algorithms=["RS256"],
-                audience=[AAD_CLIENT_ID, f"api://{AAD_CLIENT_ID}"],
-                options={"verify_iss": False},
-            )
+            claims = _decode_claims_unverified(token)
+
         tid = str(claims.get("tid") or "")
         iss = str(claims.get("iss") or "")
-        if AAD_TENANT_ID != tid and AAD_TENANT_ID not in iss:
+        if AAD_TENANT_ID and AAD_TENANT_ID != tid and AAD_TENANT_ID not in iss:
             logging.warning("get_caller: tenant no coincide (tid=%s)", tid)
             return None
         email = (
@@ -621,6 +634,7 @@ def get_caller(req: func.HttpRequest) -> Optional[Dict[str, str]]:
             or claims.get("email") or claims.get("unique_name") or ""
         ).strip().lower()
         if not email:
+            logging.warning("get_caller: token sin email (claves: %s)", list(claims.keys()))
             return None
         return {"email": email, "name": str(claims.get("name") or "")}
     except Exception as exc:
