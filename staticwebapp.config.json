@@ -37,6 +37,16 @@
     "X-Frame-Options": "SAMEORIGIN"
   },
   "mimeTypes": {
-    ".json": "application/json"
+    ".json": "application/json",
+    ".js": "text/javascript",
+    ".mjs": "text/javascript",
+    ".css": "text/css",
+    ".webmanifest": "application/manifest+json",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".ico": "image/x-icon",
+    ".woff2": "font/woff2"
   }
 }
