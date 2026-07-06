@@ -63,7 +63,7 @@ async function apiFetch(path, options = {}, cacheKey = null) {
     throw new Error(`API ${path} → no access token available`)
   }
   const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) }
-  if (token) headers['Authorization'] = `Bearer ${token}`
+  headers['X-Access-Token'] = token
   const res = await fetch(path, { ...options, headers })
   if (!res.ok) throw new Error(`API ${path} → ${res.status}`)
   const data = await res.json()
@@ -82,7 +82,7 @@ async function apiFetchBlob(path, options = {}) {
     throw new Error(`API ${path} → no access token available`)
   }
   const headers = { ...(options.headers || {}) }
-  if (token) headers['Authorization'] = `Bearer ${token}`
+  headers['X-Access-Token'] = token
   const res = await fetch(path, { ...options, headers })
   if (!res.ok) throw new Error(`API ${path} → ${res.status}`)
   return res.blob()
@@ -94,7 +94,7 @@ async function apiFetchForm(path, formData) {
     throw new Error(`API ${path} → no access token available`)
   }
   const headers = {}
-  if (token) headers['Authorization'] = `Bearer ${token}`
+  headers['X-Access-Token'] = token
   // Sin Content-Type manual: el navegador arma el boundary del multipart
   const res = await fetch(path, { method: 'POST', body: formData, headers })
   if (!res.ok) throw new Error(`API ${path} → ${res.status}`)

@@ -71,7 +71,7 @@ def cors_headers() -> Dict[str, str]:
     return {
         "Access-Control-Allow-Origin":  "*",
         "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-        "Access-Control-Allow-Headers": "Authorization, Content-Type",
+        "Access-Control-Allow-Headers": "Authorization, X-Access-Token, Content-Type",
         "Content-Type": "application/json",
     }
 
@@ -119,7 +119,7 @@ def binary_headers(content_type: str = "application/octet-stream") -> Dict[str, 
     return {
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-        "Access-Control-Allow-Headers": "Authorization, Content-Type",
+        "Access-Control-Allow-Headers": "Authorization, X-Access-Token, Content-Type",
         "Content-Type": content_type,
         "Cache-Control": "public, max-age=600",
     }
@@ -143,7 +143,9 @@ def cache_set(key: str, value: Any, ttl_seconds: int = CACHE_TTL_SECONDS) -> Non
         _cache[key] = {"expires_at": expires_at, "value": value}
 
 def is_authenticated(req: func.HttpRequest) -> bool:
-    auth = req.headers.get("Authorization", "")
+    auth = req.headers.get("Authorization", "") or req.headers.get("X-Access-Token", "")
+    if auth and not auth.startswith("Bearer ") and auth.count(".") == 2:
+        auth = f"Bearer {auth}"
     if not auth.startswith("Bearer "):
         return False
     token_part = auth[7:]
@@ -599,7 +601,9 @@ def _decode_claims_unverified(token: str) -> dict:
 def get_caller(req: func.HttpRequest) -> Optional[Dict[str, str]]:
     """Extrae la identidad (email + nombre) del token Bearer. None si el token
     falta o no trae identidad de este tenant."""
-    auth = req.headers.get("Authorization", "")
+    auth = req.headers.get("Authorization", "") or req.headers.get("X-Access-Token", "")
+    if auth and not auth.startswith("Bearer ") and auth.count(".") == 2:
+        auth = f"Bearer {auth}"
     if not auth.startswith("Bearer "):
         return None
     token = auth[7:].strip()
