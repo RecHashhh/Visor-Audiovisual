@@ -673,12 +673,18 @@ def get_caller(req: func.HttpRequest) -> Optional[Dict[str, str]]:
     if client_principal_caller is not None:
         return client_principal_caller
 
-    auth = req.headers.get("Authorization", "") or req.headers.get("X-Access-Token", "")
-    if auth and not auth.startswith("Bearer ") and auth.count(".") == 2:
-        auth = f"Bearer {auth}"
-    if not auth.startswith("Bearer "):
-        return None
-    token = auth[7:].strip()
+    # SWA con Functions gestionadas SECUESTRA el header Authorization e inyecta
+    # su propio token anónimo (aud=...azurefunctions, sin tid/upn). El token real
+    # de MSAL viaja en un header propio (X-Access-Token / X-Ripcon-Token) que el
+    # proxy de SWA no toca — por eso se prioriza sobre Authorization.
+    raw = (
+        req.headers.get("X-Access-Token", "")
+        or req.headers.get("X-Ripcon-Token", "")
+        or req.headers.get("Authorization", "")
+    ).strip()
+    if raw.startswith("Bearer "):
+        raw = raw[7:].strip()
+    token = raw
     if token.count(".") != 2:
         return None
     try:
