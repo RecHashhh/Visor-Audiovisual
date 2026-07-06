@@ -2,8 +2,7 @@
 // Un set de iconos de línea, compartido entre el Sidebar y la portada (Home),
 // para que cada sección se identifique con el mismo símbolo en toda la app.
 export const SECTION_ICONS = {
-  // 'material' = sección Proyectos (material audiovisual por obra)
-  material: (
+  proyectos: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
       <path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8A2 2 0 0 1 21 9.5V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
       <path d="M9.5 13.2l2-2.4 1.8 2 1.4-1.5 2.3 2.9" />

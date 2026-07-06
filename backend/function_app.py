@@ -9,18 +9,21 @@ import os
 import logging
 import uuid
 import io
+import time
+import tempfile
 from urllib.parse import unquote
 from threading import Lock
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any
 from PIL import Image, ImageOps
 
+import requests
 from azure.storage.blob import (
     BlobServiceClient,
     generate_blob_sas,
     BlobSasPermissions,
 )
-from azure.core.exceptions import ResourceNotFoundError
+from azure.core.exceptions import ResourceNotFoundError, ResourceExistsError
 import jwt
 from jwt import PyJWKClient
 import uploader
@@ -54,7 +57,8 @@ AAD_CLIENT_ID = os.environ.get("AAD_CLIENT_ID", "a4413b75-4069-48e0-b055-55dce31
 AUTH_MODE = os.environ.get("AUTH_MODE", "lax").strip().lower()
 # Súper-administradores permanentes (coma-separados). Siempre admins, aunque la
 # config de accesos diga otra cosa — es la vía de recuperación ante un bloqueo.
-ADMIN_EMAILS = {e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").split(",") if e.strip()}
+# agarzon es el admin de inicio; se puede ampliar/override con la env ADMIN_EMAILS.
+ADMIN_EMAILS = {e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "agarzon@ripconciv.com").split(",") if e.strip()}
 
 _cache: Dict[str, Dict[str, Any]] = {}
 _cache_lock = Lock()
@@ -558,7 +562,15 @@ def build_thumbnail_bytes(raw_bytes: bytes, max_width: int = 480, quality: int =
 # Los permisos viven en un blob JSON ({CONFIG_PREFIX}/access.json) que el
 # administrador edita desde la página "Accesos".
 
-KNOWN_SECTIONS = ["material", "proyectos", "marcas", "documentos", "videos", "eventos", "redes"]
+# La sección de material audiovisual de obra se llama "proyectos" (id = etiqueta,
+# coherente). "material" es un alias histórico que se normaliza a "proyectos".
+KNOWN_SECTIONS = ["proyectos", "marcas", "documentos", "videos", "eventos", "redes"]
+SECTION_ALIASES = {"material": "proyectos"}
+ROLES = ("admin", "operador", "viewer")
+
+def canon_section(s: str) -> str:
+    return SECTION_ALIASES.get(s, s)
+
 ACCESS_CACHE_KEY = "access:config"
 _ACCESS_NONE = "__no_config__"
 
@@ -627,27 +639,73 @@ def load_access_config() -> Optional[dict]:
     cache_set(ACCESS_CACHE_KEY, cfg if cfg is not None else _ACCESS_NONE, ttl_seconds=30)
     return cfg
 
-def _full_access(email: str, name: str, is_admin: bool, restricted: bool, bootstrap: bool) -> dict:
+# Permisos por persona = capacidades de gestión (qué puede HACER) + secciones/scopes
+# (qué puede VER). Los roles son solo presets rápidos de esas capacidades; el
+# administrador puede ajustar cada capacidad manualmente por usuario.
+CAPS = ("upload", "manageMedia", "share", "refreshIndex", "manageAccess")
+ROLE_CAPS = {
+    "admin":    {c: True for c in CAPS},
+    "operador": {"upload": True, "manageMedia": True, "share": True,
+                 "refreshIndex": True, "manageAccess": False},
+    "viewer":   {c: False for c in CAPS},
+}
+
+def _caps_from(role: str, overrides: Any) -> dict:
+    caps = dict(ROLE_CAPS.get(role, ROLE_CAPS["viewer"]))
+    if isinstance(overrides, dict):
+        for c in CAPS:
+            if c in overrides:
+                caps[c] = bool(overrides[c])
+    return caps
+
+def _perms(email, name, role, caps, sections, scopes, restricted, bootstrap, allowed=True) -> dict:
     return {
-        "email": email, "name": name, "allowed": True, "isAdmin": is_admin,
-        "sections": "*", "projects": "*", "restricted": restricted, "bootstrap": bootstrap,
+        "email": email, "name": name, "allowed": allowed, "role": role,
+        "caps": caps,
+        "isAdmin": bool(caps.get("manageAccess")),
+        "isManager": bool(caps.get("upload") or caps.get("manageMedia")),
+        "sections": sections, "scopes": scopes,
+        "restricted": restricted, "bootstrap": bootstrap,
     }
+
+def _perms_full(email: str, name: str, role: str, restricted: bool, bootstrap: bool) -> dict:
+    return _perms(email, name, role, dict(ROLE_CAPS.get(role, ROLE_CAPS["admin"])),
+                  "*", {}, restricted, bootstrap)
+
+def _normalize_scopes(entry: dict) -> dict:
+    """Mapa {seccion: [items]} con solo listas no vacías; ausencia = sin restricción.
+    Compat: la config vieja usaba 'projects' → scope de 'proyectos'."""
+    raw = entry.get("scopes")
+    raw = dict(raw) if isinstance(raw, dict) else {}
+    old = entry.get("projects")
+    if old is not None and old != "*" and isinstance(old, list) and "proyectos" not in raw and "material" not in raw:
+        raw["proyectos"] = old
+    cleaned: Dict[str, list] = {}
+    for sec, val in raw.items():
+        sec = canon_section(sec)
+        if sec not in KNOWN_SECTIONS or val == "*":
+            continue
+        if isinstance(val, list):
+            vals = [str(x).strip() for x in val if str(x).strip()]
+            if vals:
+                cleaned[sec] = vals
+    return cleaned
 
 def effective_perms(caller: Optional[Dict[str, str]]) -> dict:
     if caller is None:
-        return {"email": "", "name": "", "allowed": False, "isAdmin": False,
-                "sections": [], "projects": [], "restricted": False, "bootstrap": False}
+        return {"email": "", "name": "", "allowed": False, "role": None, "isAdmin": False,
+                "isManager": False, "sections": [], "scopes": {}, "restricted": False, "bootstrap": False}
 
     email, name = caller["email"], caller.get("name", "")
     cfg = load_access_config()
     env_admin = email in ADMIN_EMAILS
 
     if cfg is None:
-        # Sin configuración todavía: modo abierto (comportamiento histórico).
-        # Si tampoco hay ADMIN_EMAILS, cualquier usuario autenticado puede crear
-        # la primera configuración (bootstrap) y reclamar la administración.
+        # Sin configuración: modo abierto. Sin ADMIN_EMAILS, el primer usuario
+        # autenticado es admin (bootstrap) y puede crear la configuración.
         bootstrap = not ADMIN_EMAILS
-        return _full_access(email, name, env_admin or bootstrap, False, bootstrap)
+        role = "admin" if (env_admin or bootstrap) else "operador"
+        return _perms_full(email, name, role, False, bootstrap)
 
     restricted = bool(cfg.get("restricted"))
     entry = None
@@ -656,59 +714,92 @@ def effective_perms(caller: Optional[Dict[str, str]]) -> dict:
             entry = u
             break
 
-    if env_admin or (entry and entry.get("enabled", True) and entry.get("role") == "admin"):
-        return _full_access(email, name, True, restricted, False)
+    if env_admin:
+        return _perms_full(email, name, "admin", restricted, False)
 
     if entry and entry.get("enabled", True):
+        role = entry.get("role") if entry.get("role") in ROLES else "viewer"
+        caps = _caps_from(role, entry.get("caps"))
+        name = name or str(entry.get("name") or "")
+        # Quien gestiona accesos ve todo (lo necesita para administrar).
+        if caps.get("manageAccess"):
+            return _perms(email, name, role, caps, "*", {}, restricted, False)
         sections = entry.get("sections", [])
         if sections != "*":
-            sections = [s for s in sections if s in KNOWN_SECTIONS] if isinstance(sections, list) else []
-        projects = entry.get("projects", "*")
-        if projects != "*" and not isinstance(projects, list):
-            projects = []
-        return {"email": email, "name": name or str(entry.get("name") or ""), "allowed": True,
-                "isAdmin": False, "sections": sections, "projects": projects,
-                "restricted": restricted, "bootstrap": False}
+            sections = [canon_section(s) for s in sections if canon_section(s) in KNOWN_SECTIONS] if isinstance(sections, list) else []
+        return _perms(email, name, role, caps, sections, _normalize_scopes(entry), restricted, False)
 
     if restricted:
-        return {"email": email, "name": name, "allowed": False, "isAdmin": False,
-                "sections": [], "projects": [], "restricted": True, "bootstrap": False}
+        return _perms(email, name, None, dict(ROLE_CAPS["viewer"]), [], {}, True, False, allowed=False)
 
-    # Config existe pero en modo abierto: miembros del tenant no listados ven todo.
-    return _full_access(email, name, False, restricted, False)
+    # Config existe pero abierta: los no listados ven todo pero no gestionan.
+    return _perms(email, name, "viewer", dict(ROLE_CAPS["viewer"]), "*", {}, False, False)
+
+def perms_allow_section(perms: dict, section: str) -> bool:
+    if perms.get("isManager"):
+        return True
+    secs = perms.get("sections")
+    return secs == "*" or (isinstance(secs, list) and section in secs)
+
+def perms_allow_item(perms: dict, section: str, item: str) -> bool:
+    if not perms_allow_section(perms, section):
+        return False
+    if perms.get("isManager"):
+        return True
+    scope = (perms.get("scopes") or {}).get(section)
+    if not scope:            # ausente o vacío = acceso a toda la sección
+        return True
+    return item in scope
 
 def require_perms(req: func.HttpRequest, section: Optional[str] = None,
-                  project: Optional[str] = None, admin: bool = False):
+                  item: Optional[str] = None, cap: Optional[str] = None):
     """Devuelve (perms, None) si el caller pasa los requisitos, o
-    (None, HttpResponse) con el error listo para retornar."""
+    (None, HttpResponse) con el error listo para retornar.
+    `cap` exige una capacidad de gestión (upload / manageMedia / share /
+    refreshIndex / manageAccess). `section`/`item` controlan la vista."""
     caller = get_caller(req)
     perms = effective_perms(caller)
+    section = canon_section(section) if section else section
     if not perms["allowed"]:
         return None, err("No autorizado", 401 if caller is None else 403)
-    if admin and not perms["isAdmin"]:
-        return None, err("Requiere permisos de administrador", 403)
-    if not perms["isAdmin"]:
-        if section and perms["sections"] != "*" and section not in perms["sections"]:
-            return None, err("Sin acceso a esta sección", 403)
-        if project and perms["projects"] != "*" and project not in perms["projects"]:
-            return None, err("Sin acceso a este proyecto", 403)
+    if cap and not perms.get("caps", {}).get(cap):
+        msg = "Requiere permisos de administrador" if cap == "manageAccess" else "Sin permiso para esta acción"
+        return None, err(msg, 403)
+    if section and not perms_allow_section(perms, section):
+        return None, err("Sin acceso a esta sección", 403)
+    if section and item and not perms_allow_item(perms, section, item):
+        return None, err("Sin acceso a este elemento", 403)
     return perms, None
 
 def require_blob_access(req: func.HttpRequest, blob_path: str):
-    """Gate por ruta de blob: los paths de _media se controlan por sección;
-    el resto son proyectos (material + código de proyecto)."""
+    """Gate por ruta de blob: los paths de _media se controlan por sección + carpeta;
+    el resto son proyectos (proyectos + código de proyecto)."""
     seg = [s for s in (blob_path or "").split("/") if s]
     if seg and seg[0] == MEDIA_PREFIX.strip("/"):
         if len(seg) < 3:
             return None, err("Ruta de media inválida", 400)
-        return require_perms(req, section=seg[1])
-    return require_perms(req, section="material", project=seg[0] if seg else "")
+        return require_perms(req, section=seg[1], item=seg[2])
+    return require_perms(req, section="proyectos", item=seg[0] if seg else "")
 
 def _filter_projects_by_perms(items: list, perms: dict) -> list:
-    if perms.get("isAdmin") or perms.get("projects") == "*":
+    if perms.get("isManager"):
         return items
-    allowed = set(perms.get("projects") or [])
+    if not perms_allow_section(perms, "proyectos"):
+        return []
+    scope = (perms.get("scopes") or {}).get("proyectos")
+    if not scope:
+        return items
+    allowed = set(scope)
     return [p for p in items if p.get("code") in allowed]
+
+def _filter_media_folders_by_perms(folders: list, perms: dict, section: str) -> list:
+    if perms.get("isManager"):
+        return folders
+    scope = (perms.get("scopes") or {}).get(section)
+    if not scope:
+        return folders
+    allowed = set(scope)
+    return [f for f in folders if f.get("name") in allowed]
 
 def sanitize_access_config(payload: Any, saver_email: str) -> dict:
     if not isinstance(payload, dict):
@@ -726,32 +817,45 @@ def sanitize_access_config(payload: Any, saver_email: str) -> dict:
         if not email or "@" not in email or email in seen:
             continue
         seen.add(email)
-        role = u.get("role") if u.get("role") in ("admin", "viewer") else "viewer"
+        role = u.get("role") if u.get("role") in ROLES else "viewer"
+        # Capacidades: parten del preset del rol y se sobrescriben con lo que el
+        # admin marcó manualmente. Guardamos solo las 5 capacidades conocidas.
+        caps_in = u.get("caps") if isinstance(u.get("caps"), dict) else {}
+        caps = _caps_from(role, caps_in)
         sections = u.get("sections", [])
         if sections != "*":
-            sections = [s for s in sections if s in KNOWN_SECTIONS] if isinstance(sections, list) else []
-        projects = u.get("projects", "*")
-        if projects != "*":
-            projects = [str(p).strip() for p in projects if str(p).strip()] if isinstance(projects, list) else []
+            sections = [canon_section(s) for s in sections if canon_section(s) in KNOWN_SECTIONS] if isinstance(sections, list) else []
+        scopes_in = u.get("scopes") if isinstance(u.get("scopes"), dict) else {}
+        scopes: Dict[str, list] = {}
+        for sec, val in scopes_in.items():
+            sec = canon_section(sec)
+            if sec not in KNOWN_SECTIONS:
+                continue
+            if isinstance(val, list):
+                vals = [str(x).strip() for x in val if str(x).strip()]
+                if vals:
+                    scopes[sec] = vals
         users.append({
             "email": email,
             "name": str(u.get("name") or "").strip(),
             "role": role,
             "enabled": bool(u.get("enabled", True)),
+            "caps": caps,
             "sections": sections,
-            "projects": projects,
+            "scopes": scopes,
         })
 
-    active_admins = [u for u in users if u["role"] == "admin" and u["enabled"]]
+    # "Puede gestionar accesos" es la capacidad crítica: debe quedar al menos uno.
+    active_admins = [u for u in users if u["caps"].get("manageAccess") and u["enabled"]]
     if not active_admins and not ADMIN_EMAILS:
-        raise ValueError("Debe quedar al menos una persona administradora activa")
+        raise ValueError("Debe quedar al menos una persona que pueda gestionar accesos")
     if saver_email not in ADMIN_EMAILS:
         saver = next((u for u in users if u["email"] == saver_email), None)
-        if not saver or saver["role"] != "admin" or not saver["enabled"]:
-            raise ValueError("Tu propio usuario debe seguir siendo administrador activo")
+        if not saver or not saver["caps"].get("manageAccess") or not saver["enabled"]:
+            raise ValueError("Tu propio usuario debe conservar el permiso de gestionar accesos")
 
     return {
-        "version": 1,
+        "version": 2,
         "restricted": bool(payload.get("restricted")),
         "users": users,
         "updatedAt": datetime.now(timezone.utc).isoformat(),
@@ -871,7 +975,7 @@ def thumb(req: func.HttpRequest) -> func.HttpResponse:
 def get_projects(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
-    perms, auth_err = require_perms(req, section="material")
+    perms, auth_err = require_perms(req, section="proyectos")
     if auth_err:
         return auth_err
 
@@ -977,7 +1081,7 @@ def get_projects(req: func.HttpRequest) -> func.HttpResponse:
 def project_settings(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
-    _, auth_err = require_perms(req, admin=True)
+    _, auth_err = require_perms(req, cap="upload")
     if auth_err:
         return auth_err
 
@@ -1026,7 +1130,7 @@ def get_weeks(req: func.HttpRequest) -> func.HttpResponse:
         return options_ok()
 
     project_id = req.route_params.get("project_id", "")
-    _, auth_err = require_perms(req, section="material", project=project_id)
+    _, auth_err = require_perms(req, section="proyectos", item=project_id)
     if auth_err:
         return auth_err
     cache_key = f"weeks:{project_id}"
@@ -1087,7 +1191,7 @@ def get_files(req: func.HttpRequest) -> func.HttpResponse:
 
     project_id = req.route_params.get("project_id", "")
     week       = normalize_folder_path(req.route_params.get("week", ""))
-    _, auth_err = require_perms(req, section="material", project=project_id)
+    _, auth_err = require_perms(req, section="proyectos", item=project_id)
     if auth_err:
         return auth_err
     cache_key = f"files:{project_id}:{week}"
@@ -1124,7 +1228,7 @@ def browse_folder(req: func.HttpRequest) -> func.HttpResponse:
 
     project_id = req.route_params.get("project_id", "")
     path = normalize_folder_path(req.params.get("path", ""))
-    _, auth_err = require_perms(req, section="material", project=project_id)
+    _, auth_err = require_perms(req, section="proyectos", item=project_id)
     if auth_err:
         return auth_err
     cache_key = f"browse:{project_id}:{path}"
@@ -1174,7 +1278,7 @@ def sas_generate(req: func.HttpRequest) -> func.HttpResponse:
 def share_create(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
-    _, auth_err = require_perms(req, admin=True)
+    _, auth_err = require_perms(req, cap="share")
     if auth_err:
         return auth_err
 
@@ -1212,7 +1316,7 @@ def share_create(req: func.HttpRequest) -> func.HttpResponse:
 def share_list(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
-    _, auth_err = require_perms(req, admin=True)
+    _, auth_err = require_perms(req, cap="share")
     if auth_err:
         return auth_err
 
@@ -1238,7 +1342,7 @@ def share_resolve(req: func.HttpRequest) -> func.HttpResponse:
     share_token = req.route_params.get("share_token", "")
 
     if req.method == "DELETE":
-        _, auth_err = require_perms(req, admin=True)
+        _, auth_err = require_perms(req, cap="share")
         if auth_err:
             return auth_err
         try:
@@ -1324,7 +1428,7 @@ def access_config_endpoint(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
 
-    perms, auth_err = require_perms(req, admin=True)
+    perms, auth_err = require_perms(req, cap="manageAccess")
     if auth_err:
         return auth_err
 
@@ -1336,6 +1440,7 @@ def access_config_endpoint(req: func.HttpRequest) -> func.HttpResponse:
             "bootstrap": perms.get("bootstrap", False),
             "envAdmins": sorted(ADMIN_EMAILS),
             "knownSections": KNOWN_SECTIONS,
+            "capabilities": list(CAPS),
         })
 
     try:
@@ -1389,7 +1494,7 @@ def media_section(req: func.HttpRequest) -> func.HttpResponse:
         return err("Sección de media desconocida", 400)
 
     if req.method == "POST":
-        _, auth_err = require_perms(req, admin=True)
+        _, auth_err = require_perms(req, section=section, cap="manageMedia")
         if auth_err:
             return auth_err
         try:
@@ -1412,7 +1517,7 @@ def media_section(req: func.HttpRequest) -> func.HttpResponse:
             logging.error("media_create_folder: %s", exc)
             return err(str(exc), 500)
 
-    _, auth_err = require_perms(req, section=section)
+    perms, auth_err = require_perms(req, section=section)
     if auth_err:
         return auth_err
     try:
@@ -1438,6 +1543,7 @@ def media_section(req: func.HttpRequest) -> func.HttpResponse:
             {**f, "lastModified": f["lastModified"].isoformat() if f["lastModified"] else None}
             for f in sorted(folder_map.values(), key=lambda x: x["name"].lower())
         ]
+        folders = _filter_media_folders_by_perms(folders, perms, section)
         return ok({"section": section, "folders": folders})
     except Exception as exc:
         logging.error("media_list_folders: %s", exc)
@@ -1456,7 +1562,7 @@ def media_folder(req: func.HttpRequest) -> func.HttpResponse:
     if not folder:
         return err("Carpeta requerida", 400)
 
-    _, auth_err = require_perms(req, section=section)
+    _, auth_err = require_perms(req, section=section, item=folder)
     if auth_err:
         return auth_err
 
@@ -1511,7 +1617,7 @@ def media_upload(req: func.HttpRequest) -> func.HttpResponse:
     if not folder:
         return err("Carpeta requerida", 400)
 
-    _, auth_err = require_perms(req, admin=True)
+    _, auth_err = require_perms(req, section=section, item=folder, cap="manageMedia")
     if auth_err:
         return auth_err
 
@@ -1553,7 +1659,7 @@ def media_upload(req: func.HttpRequest) -> func.HttpResponse:
 def index_refresh(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
-    _, auth_err = require_perms(req, admin=True)
+    _, auth_err = require_perms(req, cap="refreshIndex")
     if auth_err:
         return auth_err
 
@@ -1591,7 +1697,7 @@ def index_refresh_timer(timer: func.TimerRequest) -> None:
 def upload(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
-    _, auth_err = require_perms(req, admin=True)
+    _, auth_err = require_perms(req, cap="upload")
     if auth_err:
         return auth_err
 
@@ -1660,7 +1766,7 @@ def upload(req: func.HttpRequest) -> func.HttpResponse:
 def upload_check(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
-    _, auth_err = require_perms(req, admin=True)
+    _, auth_err = require_perms(req, cap="upload")
     if auth_err:
         return auth_err
 
@@ -1731,7 +1837,7 @@ def upload_check(req: func.HttpRequest) -> func.HttpResponse:
 def upload_status(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
-    _, auth_err = require_perms(req, admin=True)
+    _, auth_err = require_perms(req, cap="upload")
     if auth_err:
         return auth_err
 
@@ -1755,7 +1861,7 @@ def upload_status(req: func.HttpRequest) -> func.HttpResponse:
 def upload_sharepoint(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
-    _, auth_err = require_perms(req, admin=True)
+    _, auth_err = require_perms(req, cap="upload")
     if auth_err:
         return auth_err
 
@@ -1851,7 +1957,7 @@ def upload_sharepoint(req: func.HttpRequest) -> func.HttpResponse:
 def upload_onedrive(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
-    _, auth_err = require_perms(req, admin=True)
+    _, auth_err = require_perms(req, cap="upload")
     if auth_err:
         return auth_err
 
@@ -1940,7 +2046,7 @@ def _sanitize_rel_segment(seg: str) -> str:
 def upload_local_plan(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
-    _, auth_err = require_perms(req, admin=True)
+    _, auth_err = require_perms(req, cap="upload")
     if auth_err:
         return auth_err
 
@@ -2064,7 +2170,7 @@ def upload_local_plan(req: func.HttpRequest) -> func.HttpResponse:
 def upload_resolve_sharepoint(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
-    _, auth_err = require_perms(req, admin=True)
+    _, auth_err = require_perms(req, cap="upload")
     if auth_err:
         return auth_err
 
@@ -2082,4 +2188,184 @@ def upload_resolve_sharepoint(req: func.HttpRequest) -> func.HttpResponse:
         return ok(config)
     except Exception as exc:
         logging.error("upload_resolve_sharepoint: %s", exc)
+        return err(str(exc), 500)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MIGRACIÓN REMOTA POR LOTES — SharePoint / OneDrive con conteo y progreso
+#
+# El listado (metadata, recursivo con paginación) es rápido y da el TOTAL de
+# archivos. La transferencia real (descargar de Graph + subir a blob) se hace
+# en tandas que el navegador dispara una a una, con un presupuesto de tiempo
+# por llamada, para no chocar con el timeout de la Function en carpetas enormes.
+#
+# POST /api/upload/remote/plan  → { carpeta, total, nuevos, existentes, files:[...] }
+# POST /api/upload/remote/batch → procesa una tanda; { processed, results, done }
+# ══════════════════════════════════════════════════════════════════════════════
+_REMOTE_BATCH_BUDGET_S = int(os.environ.get("REMOTE_BATCH_BUDGET_S", "420"))
+
+@app.route(route="upload/remote/plan", methods=["POST", "OPTIONS"])
+def upload_remote_plan(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_ok()
+    _, auth_err = require_perms(req, cap="upload")
+    if auth_err:
+        return auth_err
+
+    try:
+        body = req.get_json()
+    except Exception:
+        return err("Cuerpo JSON inválido", 400)
+
+    source        = (body.get("source") or "sharepoint").strip().lower()
+    project_code  = (body.get("projectCode") or "").strip()
+    project_name  = (body.get("projectName") or "").strip()
+    prefijo       = (body.get("prefijo") or "FOT").strip().upper()
+    recursive     = bool(body.get("recursive") if body.get("recursive") is not None else True)
+
+    if not project_code or not project_name:
+        return err("projectCode y projectName son requeridos", 400)
+
+    try:
+        token = uploader._get_graph_token()
+        if source == "onedrive":
+            user_email = (body.get("userEmail") or "").strip()
+            folder     = (body.get("folderPath") or "/").strip()
+            if not user_email:
+                return err("userEmail es requerido para OneDrive", 400)
+            archivos = uploader.list_onedrive_files(token, user_email, folder, recursive)
+        else:
+            sp_url   = (body.get("sharepointUrl") or "").strip()
+            site_id  = (body.get("siteId") or "").strip()
+            folder   = (body.get("folderPath") or "/").strip()
+            if sp_url and not site_id:
+                cfg = uploader.resolver_sharepoint_desde_url(sp_url)
+                site_id = cfg.get("site_id") or ""
+                folder  = cfg.get("folder_path") or "/"
+            if not site_id:
+                return err("No se pudo resolver el sitio de SharePoint", 400)
+            archivos = uploader.list_sharepoint_files(token, site_id, folder, recursive)
+
+        carpeta = uploader._resolve_carpeta(project_code, project_name)
+        trabajos = uploader._preparar_trabajos(archivos, carpeta, prefijo)
+        blob_index = uploader.construir_blob_index(get_blob_service(), prefix=f"{carpeta}/")
+
+        files = []
+        nuevos = existentes = total_bytes = 0
+        for t in trabajos:
+            exists = t["blob_path"] in blob_index
+            if exists:
+                existentes += 1
+            else:
+                nuevos += 1
+                total_bytes += int(t.get("size_bytes") or 0)
+            files.append({
+                "orig": t["nombre_orig"], "name": t["nombre_nuevo"],
+                "blobPath": t["blob_path"], "dlUrl": t["dl_url"],
+                "size": int(t.get("size_bytes") or 0),
+                "status": "existe" if exists else "nuevo",
+            })
+
+        return ok({
+            "source": source, "carpeta": carpeta,
+            "total": len(files), "nuevos": nuevos, "existentes": existentes,
+            "totalBytesNuevos": total_bytes, "files": files,
+        })
+    except Exception as exc:
+        logging.error("upload_remote_plan: %s", exc)
+        return err(str(exc), 500)
+
+
+def _remote_transfer_one(svc, token: str, dl_url: str, blob_path: str, name: str):
+    """Descarga de Graph a tempfile y sube al blob. Devuelve (status, error)."""
+    tmp_path = None
+    try:
+        suffix = os.path.splitext(name)[1] or ".bin"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp_path = tmp.name
+        try:
+            uploader._graph_download_to_path(token, dl_url, tmp_path, chunk_size=uploader.GRAPH_DOWNLOAD_CHUNK)
+        except requests.exceptions.HTTPError as e:
+            if "401" in str(e) and dl_url.startswith(uploader.GRAPH_BASE):
+                token2 = uploader._get_graph_token(force_refresh=True)
+                uploader._graph_download_to_path(token2, dl_url, tmp_path, chunk_size=uploader.GRAPH_DOWNLOAD_CHUNK)
+            else:
+                raise
+        try:
+            uploader._subir_a_blob_desde_path(
+                svc, tmp_path, blob_path,
+                content_type=uploader.content_type_para(name),
+            )
+        except ResourceExistsError:
+            return "existe", None
+        return "ok", None
+    except Exception as exc:
+        return "error", str(exc)
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+
+@app.route(route="upload/remote/batch", methods=["POST", "OPTIONS"])
+def upload_remote_batch(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_ok()
+    _, auth_err = require_perms(req, cap="upload")
+    if auth_err:
+        return auth_err
+
+    try:
+        body = req.get_json()
+    except Exception:
+        return err("Cuerpo JSON inválido", 400)
+
+    project_code = (body.get("projectCode") or "").strip()
+    project_name = (body.get("projectName") or "").strip()
+    items        = body.get("items") or []
+    budget       = min(int(body.get("budgetSeconds") or _REMOTE_BATCH_BUDGET_S), _REMOTE_BATCH_BUDGET_S)
+
+    if not project_code or not project_name:
+        return err("projectCode y projectName son requeridos", 400)
+    if not isinstance(items, list) or not items:
+        return err("items: lista requerida", 400)
+    if len(items) > 1000:
+        return err("Máximo 1000 ítems por tanda", 400)
+
+    # Los blobPath deben quedar dentro de la carpeta del proyecto; los dlUrl
+    # deben ser de Graph. Evita que el cliente escriba/lea rutas arbitrarias.
+    carpeta = uploader._resolve_carpeta(project_code, project_name)
+    prefix_ok = f"{carpeta}/"
+
+    try:
+        svc = get_blob_service()
+        token = uploader._get_graph_token()
+        results = []
+        processed = 0
+        started = time.monotonic()
+        for it in items:
+            if time.monotonic() - started > budget:
+                break
+            dl_url    = str((it or {}).get("dlUrl") or "")
+            blob_path = str((it or {}).get("blobPath") or "")
+            name      = str((it or {}).get("name") or os.path.basename(blob_path))
+            if not blob_path.startswith(prefix_ok) or not dl_url.startswith(uploader.GRAPH_BASE):
+                results.append({"blobPath": blob_path, "status": "error", "error": "Ruta u origen no válidos"})
+                processed += 1
+                continue
+            status, error = _remote_transfer_one(svc, token, dl_url, blob_path, name)
+            results.append({"blobPath": blob_path, "status": status, "error": error})
+            processed += 1
+
+        clear_index_related_cache()
+        return ok({
+            "processed": processed,
+            "total": len(items),
+            "done": processed >= len(items),
+            "results": results,
+        })
+    except Exception as exc:
+        logging.error("upload_remote_batch: %s", exc)
         return err(str(exc), 500)

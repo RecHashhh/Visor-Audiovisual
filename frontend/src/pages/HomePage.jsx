@@ -26,9 +26,9 @@ function timeAgo(iso) {
   return `Hace ${months} mes${months > 1 ? 'es' : ''}`
 }
 
-const material = SECTIONS.find(s => s.id === 'material')
+const material = SECTIONS.find(s => s.id === 'proyectos')
 const marcas = SECTIONS.find(s => s.id === 'marcas')
-const compactSections = SECTIONS.filter(s => s.id !== 'material' && s.id !== 'marcas')
+const compactSections = SECTIONS.filter(s => s.id !== 'proyectos' && s.id !== 'marcas')
 
 export default function HomePage() {
   const { me } = useAuthz()
@@ -36,7 +36,7 @@ export default function HomePage() {
   const [loading, setLoading] = useState(true)
   const [brandFolders, setBrandFolders] = useState(null) // null = cargando
 
-  const showMaterial = canSection(me, 'material')
+  const showMaterial = canSection(me, 'proyectos')
   const showMarcas = canSection(me, 'marcas')
 
   useEffect(() => {
@@ -114,7 +114,7 @@ export default function HomePage() {
       <section className="home-grid">
         {showMaterial && (
           <Link to={material.path} className="home-card home-card-featured">
-            <div className="home-card-icon">{SECTION_ICONS.material}</div>
+            <div className="home-card-icon">{SECTION_ICONS.proyectos}</div>
             <div className="home-card-title">{material.label}</div>
             <p className="home-card-desc">{material.description}</p>
             <div className="stats-bar home-featured-stats">
@@ -165,7 +165,7 @@ export default function HomePage() {
             <div className="home-card-icon">{SECTION_ICONS[s.id]}</div>
             <div className="home-card-title">{s.label}</div>
             <p className="home-card-desc">{s.description}</p>
-            {s.status === 'soon' && <span className="home-card-status">En construcción</span>}
+            <span className="home-card-cta">Explorar</span>
           </Link>
         ))}
       </section>

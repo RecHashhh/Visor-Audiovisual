@@ -61,8 +61,9 @@ async function mockApis(page) {
     const p = url.pathname
     const json = (data) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(data) })
 
+    const ALL_CAPS = { upload: true, manageMedia: true, share: true, refreshIndex: true, manageAccess: true }
     if (p === '/api/me') {
-      return json({ email: 'preview@ripconciv.com', name: 'Preview Admin', allowed: true, isAdmin: true, sections: '*', projects: '*', restricted: false, bootstrap: false })
+      return json({ email: 'agarzon@ripconciv.com', name: 'A. Garzón', allowed: true, role: 'admin', isAdmin: true, isManager: true, caps: ALL_CAPS, sections: '*', scopes: {}, restricted: false, bootstrap: false })
     }
     if (p === '/api/projects') return json(projects)
     if (p === '/api/media/marcas') {
@@ -74,7 +75,17 @@ async function mockApis(page) {
     if (p.startsWith('/api/media/marcas/RIPCONCIV')) {
       return json({ section: 'marcas', folder: 'RIPCONCIV', files: brandFiles, meta: marcaMeta })
     }
-    if (p.startsWith('/api/media/')) return json({ section: 'marcas', folder: 'GEOFORCE', files: [], meta: null })
+    const mFolders = p.match(/^\/api\/media\/([^/]+)$/)
+    if (mFolders) {
+      const sid = mFolders[1]
+      const byId = {
+        documentos: [{ name: 'Papelería', fileCount: 8, lastModified: '2026-06-30T09:00:00Z' }, { name: 'Presentaciones', fileCount: 12, lastModified: '2026-07-02T09:00:00Z' }],
+        videos: [{ name: 'Institucional 2026', fileCount: 3, lastModified: '2026-06-10T09:00:00Z' }],
+        eventos: [], redes: [],
+      }
+      return json({ section: sid, folders: byId[sid] || [] })
+    }
+    if (p.startsWith('/api/media/')) return json({ section: 'x', folder: 'x', files: [], meta: null })
     if (p === '/api/thumb') {
       const bp = url.searchParams.get('blobPath') || ''
       if (bp.includes('_media/marcas/RIPCONCIV/')) {
@@ -84,11 +95,12 @@ async function mockApis(page) {
       return route.fulfill({ path: resolve(PUB, 'hero', img), contentType: 'image/jpeg' })
     }
     if (p === '/api/access') {
+      const caps = (o) => ({ upload: false, manageMedia: false, share: false, refreshIndex: false, manageAccess: false, ...o })
       return json({ config: { restricted: false, users: [
-        { email: 'agarzon@ripconciv.com', name: '', role: 'admin', enabled: true, sections: '*', projects: '*' },
-        { email: 'consultor@externo.com', name: '', role: 'viewer', enabled: true, sections: ['material'], projects: ['33014_promart-quitumbe'] },
-        { email: 'marketing@ripconciv.com', name: '', role: 'viewer', enabled: true, sections: ['marcas', 'documentos'], projects: '*' },
-      ] }, exists: true, bootstrap: false, envAdmins: [], knownSections: ['material', 'proyectos', 'marcas', 'documentos', 'videos', 'eventos', 'redes'] })
+        { email: 'agarzon@ripconciv.com', name: '', role: 'admin', enabled: true, caps: caps({ upload: true, manageMedia: true, share: true, refreshIndex: true, manageAccess: true }), sections: '*', scopes: {} },
+        { email: 'marketing@ripconciv.com', name: '', role: 'operador', enabled: true, caps: caps({ upload: true, manageMedia: true, refreshIndex: true }), sections: '*', scopes: {} },
+        { email: 'consultor@externo.com', name: '', role: 'viewer', enabled: true, caps: caps({}), sections: ['proyectos', 'marcas'], scopes: { proyectos: ['33014_promart-quitumbe'], marcas: ['RIPCONCIV'] } },
+      ] }, exists: true, bootstrap: false, envAdmins: ['agarzon@ripconciv.com'], knownSections: ['proyectos', 'marcas', 'documentos', 'videos', 'eventos', 'redes'], capabilities: ['upload', 'manageMedia', 'share', 'refreshIndex', 'manageAccess'] })
     }
     if (p === '/api/share/list') {
       return json([
@@ -113,16 +125,13 @@ async function mockApis(page) {
 
 const shots = [
   { name: 'home-light', path: '/', theme: 'light' },
-  { name: 'home-dark', path: '/', theme: 'dark' },
   { name: 'proyectos-light', path: '/proyectos', theme: 'light' },
-  { name: 'proyectos-dark', path: '/proyectos', theme: 'dark' },
   { name: 'marcas-light', path: '/marcas', theme: 'light' },
-  { name: 'marca-ripconciv-light', path: '/marcas/RIPCONCIV', theme: 'light' },
-  { name: 'marca-ripconciv-dark', path: '/marcas/RIPCONCIV', theme: 'dark' },
+  { name: 'documentos-light', path: '/documentos', theme: 'light' },
   { name: 'upload-light', path: '/upload', theme: 'light' },
   { name: 'upload-dark', path: '/upload', theme: 'dark' },
   { name: 'accesos-light', path: '/accesos', theme: 'light' },
-  { name: 'enlaces-light', path: '/enlaces', theme: 'light' },
+  { name: 'accesos-dark', path: '/accesos', theme: 'dark' },
 ]
 
 const browser = await chromium.launch()

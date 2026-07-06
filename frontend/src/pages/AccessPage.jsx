@@ -1,6 +1,6 @@
 // src/pages/AccessPage.jsx
-// Administración de accesos: quién entra al hub, qué secciones ve y qué
-// proyectos puede abrir. Guarda todo en una sola configuración (blob JSON).
+// Administración de accesos: quién entra, con qué rol/capacidades y qué puede
+// VER (por sección y, dentro de cada sección, qué ítems concretos).
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../utils/api'
 import { useAuthz } from '../utils/authz'
@@ -8,17 +8,48 @@ import { SECTIONS } from '../config/sections'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
+// Presets de capacidades por rol (espejo del backend). Los roles son atajos:
+// después se puede activar/desactivar cada capacidad manualmente.
+const ROLE_CAPS = {
+  admin:    { upload: true,  manageMedia: true,  share: true,  refreshIndex: true,  manageAccess: true },
+  operador: { upload: true,  manageMedia: true,  share: true,  refreshIndex: true,  manageAccess: false },
+  viewer:   { upload: false, manageMedia: false, share: false, refreshIndex: false, manageAccess: false },
+}
+const ROLE_LABEL = { admin: 'Administrador', operador: 'Operador', viewer: 'Visualizador' }
+const CAP_META = [
+  { key: 'upload',       label: 'Subir material a proyectos' },
+  { key: 'manageMedia',  label: 'Crear y subir en Marcas, Documentos y demás secciones' },
+  { key: 'share',        label: 'Generar y revocar enlaces externos' },
+  { key: 'refreshIndex', label: 'Refrescar el índice de proyectos' },
+  { key: 'manageAccess', label: 'Gestionar accesos (usuarios, roles y permisos)' },
+]
+const SECTION_ALIAS = { material: 'proyectos' }
+const canon = (s) => SECTION_ALIAS[s] || s
+
+function capsMatch(caps, role) {
+  return CAP_META.every(c => Boolean(caps[c.key]) === ROLE_CAPS[role][c.key])
+}
+function roleLabelFor(u) {
+  const preset = ['admin', 'operador', 'viewer'].find(r => capsMatch(u.caps, r))
+  return preset ? ROLE_LABEL[preset] : 'Personalizado'
+}
+
+function normalizeUser(u) {
+  const role = u.role === 'admin' ? 'admin' : u.role === 'operador' ? 'operador' : 'viewer'
+  const caps = { ...ROLE_CAPS[role], ...(u.caps && typeof u.caps === 'object' ? u.caps : {}) }
+  let sections = u.sections === '*' ? '*' : (Array.isArray(u.sections) ? u.sections.map(canon) : [])
+  const scopes = {}
+  const rawScopes = (u.scopes && typeof u.scopes === 'object') ? u.scopes : {}
+  Object.entries(rawScopes).forEach(([k, v]) => { if (Array.isArray(v) && v.length) scopes[canon(k)] = v })
+  // compat: 'projects' viejo → scope de proyectos
+  if (Array.isArray(u.projects) && u.projects.length && !scopes.proyectos) scopes.proyectos = u.projects
+  return { email: u.email || '', name: u.name || '', role, enabled: u.enabled !== false, caps, sections, scopes }
+}
+
 function normalizeConfig(raw) {
   return {
     restricted: Boolean(raw?.restricted),
-    users: Array.isArray(raw?.users) ? raw.users.map(u => ({
-      email: u.email || '',
-      name: u.name || '',
-      role: u.role === 'admin' ? 'admin' : 'viewer',
-      enabled: u.enabled !== false,
-      sections: u.sections === '*' ? '*' : (Array.isArray(u.sections) ? u.sections : []),
-      projects: u.projects === '*' ? '*' : (Array.isArray(u.projects) ? u.projects : []),
-    })) : [],
+    users: Array.isArray(raw?.users) ? raw.users.map(normalizeUser) : [],
   }
 }
 
@@ -26,8 +57,8 @@ export default function AccessPage() {
   const { me, refresh } = useAuthz()
   const [cfg, setCfg] = useState(null)
   const [origJson, setOrigJson] = useState('')
-  const [meta, setMeta] = useState({ bootstrap: false, envAdmins: [], exists: false })
-  const [projects, setProjects] = useState([])
+  const [meta, setMeta] = useState({ bootstrap: false, envAdmins: [] })
+  const [sectionItems, setSectionItems] = useState({})   // { sectionId: [{id,label}] }
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [saving, setSaving] = useState(false)
@@ -35,20 +66,26 @@ export default function AccessPage() {
   const [newEmail, setNewEmail] = useState('')
 
   useEffect(() => {
+    const mediaSections = SECTIONS.filter(s => s.kind === 'media')
     Promise.all([
       api.getAccessConfig(),
       api.getProjects().catch(() => []),
+      ...mediaSections.map(s => api.listMediaFolders(s.id).then(d => [s.id, d?.folders || []]).catch(() => [s.id, []])),
     ])
-      .then(([accessData, projectsData]) => {
+      .then(([accessData, projectsData, ...mediaResults]) => {
         const normalized = normalizeConfig(accessData?.config)
         setCfg(normalized)
         setOrigJson(JSON.stringify(normalized))
-        setMeta({
-          bootstrap: Boolean(accessData?.bootstrap),
-          envAdmins: accessData?.envAdmins || [],
-          exists: Boolean(accessData?.exists),
+        setMeta({ bootstrap: Boolean(accessData?.bootstrap), envAdmins: accessData?.envAdmins || [] })
+        const items = {
+          proyectos: (Array.isArray(projectsData) ? projectsData : [])
+            .filter(p => p.hasContent !== false)
+            .map(p => ({ id: p.code, label: p.name ? `${p.code} — ${p.name}` : p.code })),
+        }
+        mediaResults.forEach(([sid, folders]) => {
+          items[sid] = folders.map(f => ({ id: f.name, label: f.name }))
         })
-        setProjects(Array.isArray(projectsData) ? projectsData.filter(p => p.hasContent !== false) : [])
+        setSectionItems(items)
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
@@ -61,25 +98,28 @@ export default function AccessPage() {
     setSaveMsg(null)
   }
 
+  function setRole(idx, role) {
+    // Preset rápido: fija capacidades y, para roles de gestión, vista completa.
+    const patch = { role, caps: { ...ROLE_CAPS[role] } }
+    if (role === 'admin' || role === 'operador') { patch.sections = '*'; patch.scopes = {} }
+    else if (cfg.users[idx].sections === '*') { patch.sections = [] }
+    patchUser(idx, patch)
+  }
+
+  function toggleCap(idx, cap) {
+    const u = cfg.users[idx]
+    patchUser(idx, { caps: { ...u.caps, [cap]: !u.caps[cap] } })
+  }
+
   function addUser() {
     const email = newEmail.trim().toLowerCase()
-    if (!EMAIL_RE.test(email)) {
-      setSaveMsg({ ok: false, text: 'Escribe un correo válido, por ejemplo nombre@ripconciv.com' })
-      return
-    }
-    if (cfg.users.some(u => u.email === email)) {
-      setSaveMsg({ ok: false, text: 'Ese correo ya está en la lista.' })
-      return
-    }
+    if (!EMAIL_RE.test(email)) { setSaveMsg({ ok: false, text: 'Escribe un correo válido, p. ej. nombre@ripconciv.com' }); return }
+    if (cfg.users.some(u => u.email === email)) { setSaveMsg({ ok: false, text: 'Ese correo ya está en la lista.' }); return }
     setCfg(c => ({
       ...c,
-      users: [...c.users, {
-        email, name: '', role: 'viewer', enabled: true,
-        sections: ['material'], projects: '*',
-      }],
+      users: [...c.users, { email, name: '', role: 'viewer', enabled: true, caps: { ...ROLE_CAPS.viewer }, sections: ['proyectos'], scopes: {} }],
     }))
-    setNewEmail('')
-    setSaveMsg(null)
+    setNewEmail(''); setSaveMsg(null)
   }
 
   function removeUser(idx) {
@@ -87,40 +127,18 @@ export default function AccessPage() {
     setSaveMsg(null)
   }
 
-  function toggleSection(idx, sectionId) {
-    const u = cfg.users[idx]
-    const current = u.sections === '*' ? SECTIONS.map(s => s.id) : u.sections
-    const next = current.includes(sectionId)
-      ? current.filter(s => s !== sectionId)
-      : [...current, sectionId]
-    patchUser(idx, { sections: next })
-  }
-
-  function toggleProject(idx, code) {
-    const u = cfg.users[idx]
-    const current = u.projects === '*' ? [] : u.projects
-    const next = current.includes(code)
-      ? current.filter(c => c !== code)
-      : [...current, code]
-    patchUser(idx, { projects: next })
-  }
-
   async function save() {
-    setSaving(true)
-    setSaveMsg(null)
+    setSaving(true); setSaveMsg(null)
     try {
       const res = await api.saveAccessConfig(cfg)
       const normalized = normalizeConfig(res?.config)
-      setCfg(normalized)
-      setOrigJson(JSON.stringify(normalized))
-      setMeta(m => ({ ...m, exists: true, bootstrap: false }))
+      setCfg(normalized); setOrigJson(JSON.stringify(normalized))
+      setMeta(m => ({ ...m, bootstrap: false }))
       setSaveMsg({ ok: true, text: 'Cambios guardados. Los permisos aplican en menos de un minuto.' })
       refresh()
     } catch (e) {
       setSaveMsg({ ok: false, text: `No se pudo guardar: ${e.message}` })
-    } finally {
-      setSaving(false)
-    }
+    } finally { setSaving(false) }
   }
 
   const selfEmail = (me?.email || '').toLowerCase()
@@ -133,15 +151,13 @@ export default function AccessPage() {
     <>
       <div className="page-header">
         <h1 className="page-title">Accesos</h1>
-        <p className="page-sub">
-          Decide quién entra al hub, qué secciones ve y qué proyectos puede abrir.
-        </p>
+        <p className="page-sub">Decide quién entra, qué puede hacer y qué puede ver — hasta el nivel de cada proyecto o marca.</p>
       </div>
 
       {meta.bootstrap && (
         <div className="access-banner">
-          Aún no existe configuración de accesos. Al guardar por primera vez, tu cuenta
-          quedará como administradora y podrás restringir el resto.
+          Aún no existe configuración de accesos. Al guardar por primera vez, tu cuenta queda como
+          administradora y podrás gestionar el resto.
         </div>
       )}
 
@@ -152,15 +168,12 @@ export default function AccessPage() {
             <p className="access-card-desc">
               {cfg.restricted
                 ? 'Restringido: solo las personas de la lista pueden usar el hub.'
-                : 'Abierto: cualquier persona de la organización que inicie sesión ve todo. Actívalo cuando la lista esté completa.'}
+                : 'Abierto: cualquiera de la organización que inicie sesión ve todo. Actívalo cuando la lista esté completa.'}
             </p>
           </div>
           <label className="switch">
-            <input
-              type="checkbox"
-              checked={cfg.restricted}
-              onChange={e => { setCfg(c => ({ ...c, restricted: e.target.checked })); setSaveMsg(null) }}
-            />
+            <input type="checkbox" checked={cfg.restricted}
+              onChange={e => { setCfg(c => ({ ...c, restricted: e.target.checked })); setSaveMsg(null) }} />
             <span className="switch-slider" aria-hidden="true" />
             <span className="switch-label">{cfg.restricted ? 'Restringido' : 'Abierto'}</span>
           </label>
@@ -172,36 +185,26 @@ export default function AccessPage() {
           <div>
             <div className="access-card-title">Personas ({cfg.users.length})</div>
             <p className="access-card-desc">
-              Los administradores ven todo y gestionan el hub. Los visualizadores solo ven
-              las secciones y proyectos que les asignes.
+              Elige un rol como punto de partida y luego ajusta manualmente cada capacidad y qué puede ver.
             </p>
           </div>
         </div>
 
         <div className="access-add">
-          <input
-            className="search-input"
-            type="email"
-            placeholder="correo@ripconciv.com"
-            value={newEmail}
-            onChange={e => setNewEmail(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && addUser()}
-          />
+          <input className="search-input" type="email" placeholder="correo@ripconciv.com"
+            value={newEmail} onChange={e => setNewEmail(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && addUser()} />
           <button className="btn btn-primary" onClick={addUser}>Agregar persona</button>
         </div>
 
         {meta.envAdmins.length > 0 && (
-          <p className="access-envnote">
-            Administradores permanentes (configurados en el servidor): {meta.envAdmins.join(', ')}
-          </p>
+          <p className="access-envnote">Administradores permanentes (fijados en el servidor): {meta.envAdmins.join(', ')}</p>
         )}
 
         {cfg.users.length === 0 && (
           <div className="empty">
             <div className="empty-text">Aún no hay personas en la lista</div>
-            <p className="access-empty-hint">
-              Agrega el primer correo arriba. Mientras el modo sea Abierto, nadie pierde acceso.
-            </p>
+            <p className="access-empty-hint">Agrega el primer correo arriba. Mientras el modo sea Abierto, nadie pierde acceso.</p>
           </div>
         )}
 
@@ -211,10 +214,10 @@ export default function AccessPage() {
               key={u.email}
               user={u}
               isSelf={u.email === selfEmail}
-              projects={projects}
+              sectionItems={sectionItems}
               onPatch={patch => patchUser(idx, patch)}
-              onToggleSection={id => toggleSection(idx, id)}
-              onToggleProject={code => toggleProject(idx, code)}
+              onSetRole={role => setRole(idx, role)}
+              onToggleCap={cap => toggleCap(idx, cap)}
               onRemove={() => removeUser(idx)}
             />
           ))}
@@ -223,21 +226,11 @@ export default function AccessPage() {
 
       {(dirty || saveMsg) && (
         <div className="access-savebar">
-          {saveMsg && (
-            <span className={`access-savemsg ${saveMsg.ok ? 'ok' : 'error'}`}>{saveMsg.text}</span>
-          )}
+          {saveMsg && <span className={`access-savemsg ${saveMsg.ok ? 'ok' : 'error'}`}>{saveMsg.text}</span>}
           {dirty && (
             <>
-              <button
-                className="btn btn-ghost"
-                onClick={() => { setCfg(JSON.parse(origJson)); setSaveMsg(null) }}
-                disabled={saving}
-              >
-                Descartar
-              </button>
-              <button className="btn btn-primary" onClick={save} disabled={saving}>
-                {saving ? 'Guardando...' : 'Guardar cambios'}
-              </button>
+              <button className="btn btn-ghost" onClick={() => { setCfg(JSON.parse(origJson)); setSaveMsg(null) }} disabled={saving}>Descartar</button>
+              <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? 'Guardando...' : 'Guardar cambios'}</button>
             </>
           )}
         </div>
@@ -246,20 +239,21 @@ export default function AccessPage() {
   )
 }
 
-function UserRow({ user: u, isSelf, projects, onPatch, onToggleSection, onToggleProject, onRemove }) {
-  const [projectSearch, setProjectSearch] = useState('')
-  const isViewer = u.role !== 'admin'
-  const sectionsList = u.sections === '*' ? SECTIONS.map(s => s.id) : u.sections
-  const hasMaterial = sectionsList.includes('material')
-  const allProjects = u.projects === '*'
+function UserRow({ user: u, isSelf, sectionItems, onPatch, onSetRole, onToggleCap, onRemove }) {
+  const canManageAll = u.caps.manageAccess
+  const viewSections = u.caps.manageAccess ? '*' : u.sections
 
-  const filteredProjects = useMemo(() => {
-    const q = projectSearch.toLowerCase()
-    if (!q) return projects
-    return projects.filter(p =>
-      p.code?.toLowerCase().includes(q) || p.name?.toLowerCase().includes(q)
-    )
-  }, [projects, projectSearch])
+  function toggleSection(sectionId) {
+    const current = u.sections === '*' ? SECTIONS.map(s => s.id) : u.sections
+    const next = current.includes(sectionId) ? current.filter(s => s !== sectionId) : [...current, sectionId]
+    onPatch({ sections: next })
+  }
+  function setScope(sectionId, itemIds) {
+    const scopes = { ...u.scopes }
+    if (!itemIds || itemIds.length === 0) delete scopes[sectionId]
+    else scopes[sectionId] = itemIds
+    onPatch({ scopes })
+  }
 
   return (
     <div className={`access-user ${u.enabled ? '' : 'is-disabled'}`}>
@@ -267,32 +261,14 @@ function UserRow({ user: u, isSelf, projects, onPatch, onToggleSection, onToggle
         <div className="access-user-id">
           <span className="access-user-email">{u.email}</span>
           {isSelf && <span className="badge badge-accent">Tú</span>}
-          {u.name && <span className="access-user-name">{u.name}</span>}
+          <span className="access-user-role">{roleLabelFor(u)}</span>
         </div>
         <div className="access-user-controls">
-          <select
-            className="select"
-            value={u.role}
-            onChange={e => onPatch({ role: e.target.value })}
-            aria-label={`Rol de ${u.email}`}
-          >
-            <option value="viewer">Visualizador</option>
-            <option value="admin">Administrador</option>
-          </select>
           <label className="switch switch-sm" title={u.enabled ? 'Acceso activo' : 'Acceso pausado'}>
-            <input
-              type="checkbox"
-              checked={u.enabled}
-              onChange={e => onPatch({ enabled: e.target.checked })}
-            />
+            <input type="checkbox" checked={u.enabled} onChange={e => onPatch({ enabled: e.target.checked })} />
             <span className="switch-slider" aria-hidden="true" />
           </label>
-          <button
-            className="icon-btn icon-btn-danger"
-            onClick={onRemove}
-            aria-label={`Quitar a ${u.email}`}
-            title="Quitar de la lista"
-          >
+          <button className="icon-btn icon-btn-danger" onClick={onRemove} aria-label={`Quitar a ${u.email}`} title="Quitar de la lista">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round">
               <path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6.5 7l.8 12a1 1 0 0 0 1 .9h7.4a1 1 0 0 0 1-.9l.8-12M10 11v5M14 11v5" />
             </svg>
@@ -300,70 +276,68 @@ function UserRow({ user: u, isSelf, projects, onPatch, onToggleSection, onToggle
         </div>
       </div>
 
-      {isViewer && (
-        <div className="access-user-body">
-          <div className="access-field">
-            <span className="access-field-label">Secciones</span>
-            <div className="access-chips">
-              {SECTIONS.map(s => (
-                <button
-                  key={s.id}
-                  className={`filter-chip ${sectionsList.includes(s.id) ? 'active' : ''}`}
-                  onClick={() => onToggleSection(s.id)}
-                >
-                  {s.label}
-                </button>
-              ))}
-            </div>
+      <div className="access-user-body">
+        <div className="access-field">
+          <span className="access-field-label">Rol (punto de partida)</span>
+          <div className="segmented">
+            {['admin', 'operador', 'viewer'].map(r => (
+              <button key={r} className={`segmented-btn ${capsMatch(u.caps, r) && ((r !== 'viewer') === (u.sections === '*')) ? 'active' : ''}`}
+                onClick={() => onSetRole(r)}>{ROLE_LABEL[r]}</button>
+            ))}
           </div>
+        </div>
 
-          {hasMaterial && (
-            <div className="access-field">
-              <span className="access-field-label">Proyectos</span>
-              <div className="access-projects">
-                <div className="access-chips">
-                  <button
-                    className={`filter-chip ${allProjects ? 'active' : ''}`}
-                    onClick={() => onPatch({ projects: allProjects ? [] : '*' })}
-                  >
-                    Todos los proyectos
-                  </button>
-                  {!allProjects && (
-                    <span className="access-projects-count">
-                      {u.projects.length} seleccionado{u.projects.length !== 1 ? 's' : ''}
-                    </span>
-                  )}
-                </div>
-                {!allProjects && (
-                  <>
-                    <input
-                      className="search-input access-projects-search"
-                      placeholder="Buscar proyecto por código o nombre..."
-                      value={projectSearch}
-                      onChange={e => setProjectSearch(e.target.value)}
-                    />
-                    <div className="access-projects-list">
-                      {filteredProjects.map(p => (
-                        <button
-                          key={p.code}
-                          className={`filter-chip ${u.projects.includes(p.code) ? 'active' : ''}`}
-                          title={p.name}
-                          onClick={() => onToggleProject(p.code)}
-                        >
-                          {p.code}
-                        </button>
-                      ))}
-                      {filteredProjects.length === 0 && (
-                        <span className="access-projects-count">Sin resultados para “{projectSearch}”</span>
-                      )}
-                    </div>
-                  </>
-                )}
-              </div>
+        <div className="access-field">
+          <span className="access-field-label">Qué puede hacer</span>
+          <div className="access-caps">
+            {CAP_META.map(c => (
+              <label key={c.key} className="access-cap">
+                <input type="checkbox" checked={Boolean(u.caps[c.key])} onChange={() => onToggleCap(c.key)} />
+                <span>{c.label}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <div className="access-field">
+          <span className="access-field-label">Qué puede ver</span>
+          {canManageAll ? (
+            <p className="access-hint">Con “gestionar accesos” activo, ve todas las secciones y todo su contenido.</p>
+          ) : (
+            <div className="access-view">
+              {SECTIONS.map(s => {
+                const active = viewSections === '*' || (Array.isArray(viewSections) && viewSections.includes(s.id))
+                const scope = u.scopes[s.id]
+                const items = sectionItems[s.id] || []
+                return (
+                  <div key={s.id} className="access-view-row">
+                    <button className={`filter-chip ${active ? 'active' : ''}`} onClick={() => toggleSection(s.id)}>
+                      {s.label}
+                    </button>
+                    {active && items.length > 0 && (
+                      <div className="access-scope">
+                        <button className={`chip-mini ${!scope ? 'active' : ''}`} onClick={() => setScope(s.id, [])}>Todo</button>
+                        {items.map(it => {
+                          const on = Array.isArray(scope) && scope.includes(it.id)
+                          return (
+                            <button key={it.id} className={`chip-mini ${on ? 'active' : ''}`} title={it.label}
+                              onClick={() => {
+                                const cur = Array.isArray(scope) ? scope : []
+                                setScope(s.id, on ? cur.filter(x => x !== it.id) : [...cur, it.id])
+                              }}>
+                              {it.id}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           )}
         </div>
-      )}
+      </div>
     </div>
   )
 }

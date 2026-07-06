@@ -44,7 +44,7 @@ export default function CommandPalette() {
     if (loadedRef.current) return
     loadedRef.current = true
     const loads = []
-    if (canSection(me, 'material')) {
+    if (canSection(me, 'proyectos')) {
       loads.push(
         api.getProjects()
           .then(ps => (Array.isArray(ps) ? ps : [])

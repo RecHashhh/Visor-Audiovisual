@@ -1,56 +1,60 @@
 // src/config/sections.js
 // Registro central de secciones del hub. Agregar una sección nueva = una entrada aquí
-// (Sidebar y las rutas "próximamente" se generan a partir de esta lista).
-// Código de hoja al estilo de un índice de planos (convención MEP: M, E, S, A...):
-// identifica cada sección, no implica un orden secuencial.
+// (Sidebar, rutas y destino de subida se generan a partir de esta lista).
+//
+// kind:
+//   'projects' → carpetas por obra con código + semanas (la sección Proyectos).
+//   'media'    → biblioteca de carpetas libres en el blob (_media/<id>/…).
 export const SECTIONS = [
   {
-    // id interno se mantiene 'material' para no romper permisos ya guardados
-    id: 'material',
-    code: 'P-01',
+    id: 'proyectos',
     label: 'Proyectos',
     path: '/proyectos',
+    kind: 'projects',
     status: 'active',
     description: 'Todo el material audiovisual de cada obra: fotos, dron, video y 360° organizados por proyecto y semana.',
   },
   {
     id: 'marcas',
-    code: 'MK-01',
     label: 'Marcas',
     path: '/marcas',
+    kind: 'media',
     status: 'active',
     description: 'Arquetipo, personalidad y variantes descargables de cada marca del grupo RIPCON, filtrables por fondo, color y formato.',
   },
   {
     id: 'documentos',
-    code: 'D-01',
     label: 'Documentos y Plantillas',
     path: '/documentos',
-    status: 'soon',
+    kind: 'media',
+    status: 'active',
     description: 'Plantillas de marca, papelería, presentaciones y manuales listos para usar.',
   },
   {
     id: 'videos',
-    code: 'V-01',
     label: 'Videos Corporativos',
-    path: '/videos-corporativos',
-    status: 'soon',
+    path: '/videos',
+    kind: 'media',
+    status: 'active',
     description: 'Institucionales y spots de la empresa, independientes de cada obra.',
   },
   {
     id: 'eventos',
-    code: 'EV-01',
     label: 'Fotografía de Eventos',
-    path: '/fotografia-eventos',
-    status: 'soon',
+    path: '/eventos',
+    kind: 'media',
+    status: 'active',
     description: 'Eventos corporativos, equipo y cultura de empresa.',
   },
   {
     id: 'redes',
-    code: 'R-01',
     label: 'Redes Sociales',
-    path: '/redes-sociales',
-    status: 'soon',
+    path: '/redes',
+    kind: 'media',
+    status: 'active',
     description: 'Contenido preparado y publicado para Instagram, LinkedIn y más.',
   },
 ]
+
+export const MEDIA_SECTIONS = SECTIONS.filter(s => s.kind === 'media')
+export const sectionById = (id) => SECTIONS.find(s => s.id === id)
