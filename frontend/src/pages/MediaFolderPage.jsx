@@ -21,7 +21,29 @@ const FORMAT_ORDER = ['centrada', 'horizontal', 'simbolo', 'tagline-centrada', '
 const VARIANT_RE = /^(tagline-centrada|tagline-horizontal|tagline-logotipo|centrada|horizontal|simbolo)-(positivo|negativo)-(azul|bn|b)$/
 const IMG_EXT = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'tif', 'tiff']
 
-const isImage = (name) => IMG_EXT.includes((name.split('.').pop() || '').toLowerCase())
+const FONT_EXT = ['ttf', 'otf', 'woff', 'woff2']
+const HTML_EXT = ['html', 'htm']
+const extOf = (name) => (name.split('.').pop() || '').toLowerCase()
+const isImage = (name) => IMG_EXT.includes(extOf(name))
+const isFont = (name) => FONT_EXT.includes(extOf(name))
+const isHtml = (name) => HTML_EXT.includes(extOf(name))
+
+// Empareja un archivo fuente (.ai, .eps…) con la imagen de vista previa que ya
+// existe en la carpeta: normaliza ambos nombres y busca la imagen cuyo nombre
+// sea el sufijo más largo del nombre del fuente (p. ej. RIPCONCIV_version_
+// horizontal_positivo_azul.ai ↔ horizontal-positivo-azul.png).
+const normalizeName = (s) =>
+  s.replace(/\.[^.]+$/, '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '')
+function findPreviewImage(docName, images) {
+  const dn = normalizeName(docName)
+  if (!dn) return null
+  let best = null, bestLen = 0
+  for (const img of images) {
+    const inm = normalizeName(img.name)
+    if (inm && dn.endsWith(inm) && inm.length > bestLen) { best = img; bestLen = inm.length }
+  }
+  return best
+}
 
 // Paleta oficial por defecto para marcas conocidas (mientras marca.json no traiga
 // su propio `colors`). Clave = nombre de carpeta en minúsculas.
@@ -94,7 +116,10 @@ export default function MediaFolderPage({ sectionId }) {
   const variantPaths = useMemo(() => new Set(variants.map(v => v.path)), [variants])
   const otherFiles = files.filter(f => !variantPaths.has(f.path))
   const otherImages = otherFiles.filter(f => isImage(f.name))
-  const otherDocs = otherFiles.filter(f => !isImage(f.name))
+  const fontFiles = otherFiles.filter(f => isFont(f.name))
+  const htmlFiles = otherFiles.filter(f => isHtml(f.name))
+  // "Archivos" = lo que no es imagen, ni fuente (→ Tipografía), ni html (→ Firmas).
+  const otherDocs = otherFiles.filter(f => !isImage(f.name) && !isFont(f.name) && !isHtml(f.name))
 
   // Lista maestra de imágenes de la carpeta (variantes + otras imágenes) para el
   // visor grande: al abrir una, las flechas recorren TODAS en orden alfabético.
@@ -195,6 +220,8 @@ export default function MediaFolderPage({ sectionId }) {
 
       {brandColors.length > 0 && <BrandColors colors={brandColors} />}
 
+      {fontFiles.length > 0 && <Typography fonts={fontFiles} />}
+
       {files.length === 0 && (
         <div className="empty">
           <div className="empty-text">Esta carpeta aún no tiene archivos</div>
@@ -258,10 +285,14 @@ export default function MediaFolderPage({ sectionId }) {
         </section>
       )}
 
+      {htmlFiles.length > 0 && <HtmlPreviews files={htmlFiles} />}
+
       {otherDocs.length > 0 && (
         <section className="logo-group">
           <h2 className="logo-group-title">Archivos<span className="logo-group-count">{otherDocs.length}</span></h2>
-          <div className="media-img-grid">{otherDocs.map(f => <FileTile key={f.path} file={f} />)}</div>
+          <div className="media-img-grid">
+            {otherDocs.map(f => <FileTile key={f.path} file={f} previewPath={findPreviewImage(f.name, imageFiles)?.path} />)}
+          </div>
         </section>
       )}
 
@@ -454,15 +485,24 @@ function fileKind(name) {
   return FILE_KINDS[ext] || { badge: (ext || 'FILE').toUpperCase().slice(0, 4), glyph: '', tint: '#9aa3b8', bg: '#161821' }
 }
 
-function FileTile({ file: f }) {
+function FileTile({ file: f, previewPath }) {
   const name = f.name.split('/').pop()
   const k = fileKind(name)
+  const [src, setSrc] = useState(null)
+  useEffect(() => {
+    if (!previewPath) return
+    let alive = true
+    fetchThumb(previewPath, { w: 480, mode: 'logo' }).then(u => { if (alive) setSrc(u) }).catch(() => {})
+    return () => { alive = false }
+  }, [previewPath])
   return (
     <div className="media-img-tile">
-      <div className="file-tile-preview" style={{ background: k.bg }}>
-        {k.glyph
-          ? <span className="file-tile-glyph" style={{ color: k.tint }}>{k.glyph}</span>
-          : <DocIcon color={k.tint} />}
+      <div className="file-tile-preview" style={{ background: src ? '#f2f3f7' : k.bg }}>
+        {src
+          ? <img className="file-tile-img" src={src} alt={name} />
+          : k.glyph
+            ? <span className="file-tile-glyph" style={{ color: k.tint }}>{k.glyph}</span>
+            : <DocIcon color={k.tint} />}
         <span className="file-tile-badge" style={{ background: k.tint }}>{k.badge}</span>
       </div>
       <div className="media-img-caption">
@@ -484,6 +524,114 @@ function DocIcon({ color }) {
       <path d="M7 3h7l4 4v14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" />
       <path d="M14 3v4h4" />
     </svg>
+  )
+}
+
+// ── Tipografía: especímenes de fuente en vivo (carga la fuente del blob) ──────
+function Typography({ fonts }) {
+  return (
+    <section className="typo-section">
+      <h2 className="logo-group-title">Tipografía<span className="logo-group-count">{fonts.length}</span></h2>
+      {fonts.map(f => <FontSpecimen key={f.path} file={f} />)}
+    </section>
+  )
+}
+
+const TYPO_WEIGHTS = [
+  { w: 300, l: 'Light' }, { w: 400, l: 'Regular' }, { w: 500, l: 'Medium' },
+  { w: 600, l: 'SemiBold' }, { w: 700, l: 'Bold' }, { w: 800, l: 'ExtraBold' },
+]
+const TYPO_SAMPLE = 'Construcción e ingeniería civil'
+
+function FontSpecimen({ file: f }) {
+  const name = f.name.split('/').pop().replace(/\.[^.]+$/, '')
+  const [family, setFamily] = useState(null)
+  const [failed, setFailed] = useState(false)
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      try {
+        const { sasUrl } = await api.getSasUrl(f.path, 30)
+        const fam = `mediafont-${f.path.replace(/[^a-z0-9]/gi, '')}`
+        const face = new FontFace(fam, `url("${sasUrl}")`)
+        await face.load()
+        if (!alive) return
+        document.fonts.add(face)
+        setFamily(fam)
+      } catch { if (alive) setFailed(true) }
+    })()
+    return () => { alive = false }
+  }, [f.path])
+  const style = family ? { fontFamily: `"${family}", var(--font-body)` } : {}
+  return (
+    <div className="typo-card">
+      <div className="typo-head">
+        <span className="typo-aa" style={style}>Aa</span>
+        <div className="typo-meta">
+          <span className="typo-name">{name}</span>
+          <span className="typo-sub">{extOf(f.name).toUpperCase()} · {fmtSize(f.size)}{f.lastModified ? ` · ${fmtDate(f.lastModified)}` : ''}</span>
+        </div>
+        <button className="btn btn-ghost btn-sm" onClick={() => downloadFile(f.path, f.name.split('/').pop()).catch(() => {})}>Descargar</button>
+      </div>
+      {failed
+        ? <p className="typo-fail">No se pudo cargar la vista previa de esta fuente. Puedes descargarla.</p>
+        : (
+          <div className="typo-lines">
+            {TYPO_WEIGHTS.map(wt => (
+              <div key={wt.w} className="typo-line">
+                <span className="typo-weight">{wt.l} {wt.w}</span>
+                <span className="typo-sample" style={{ ...style, fontWeight: wt.w }}>{TYPO_SAMPLE}</span>
+              </div>
+            ))}
+          </div>
+        )}
+    </div>
+  )
+}
+
+// ── Firmas / vista previa de HTML en un iframe aislado ────────────────────────
+function HtmlPreviews({ files }) {
+  return (
+    <section className="html-section">
+      <h2 className="logo-group-title">Vista previa<span className="logo-group-count">{files.length}</span></h2>
+      <div className="html-grid">{files.map(f => <HtmlPreview key={f.path} file={f} />)}</div>
+    </section>
+  )
+}
+
+function HtmlPreview({ file: f }) {
+  const name = f.name.split('/').pop()
+  const [html, setHtml] = useState(null)
+  const [failed, setFailed] = useState(false)
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      try {
+        const { sasUrl } = await api.getSasUrl(f.path, 15)
+        const res = await fetch(sasUrl)
+        if (!res.ok) throw new Error('fetch')
+        const text = await res.text()
+        if (alive) setHtml(text)
+      } catch { if (alive) setFailed(true) }
+    })()
+    return () => { alive = false }
+  }, [f.path])
+  return (
+    <div className="html-card">
+      <div className="html-card-head">
+        <span className="media-img-name" title={name}>{name}</span>
+        <button className="icon-btn" onClick={() => downloadFile(f.path, name).catch(() => {})} title="Descargar" aria-label={`Descargar ${name}`}>
+          <DownloadIcon />
+        </button>
+      </div>
+      <div className="html-frame-wrap">
+        {failed
+          ? <p className="typo-fail">No se pudo cargar la vista previa. Puedes descargar el archivo.</p>
+          : html === null
+            ? <div className="spinner" />
+            : <iframe className="html-frame" sandbox="" srcDoc={html} title={name} />}
+      </div>
+    </div>
   )
 }
 

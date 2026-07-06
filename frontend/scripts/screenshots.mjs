@@ -12,7 +12,7 @@
 //
 // Salida: frontend/.shots/*.png (ignorado por git)
 import { chromium } from 'playwright'
-import { readdirSync, mkdirSync } from 'node:fs'
+import { readdirSync, mkdirSync, readFileSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -24,6 +24,7 @@ mkdirSync(OUT, { recursive: true })
 
 const DAY = 'puente-dia.jpg'
 const NIGHT = 'puente-noche.jpg'
+const FIRMA_HTML = readFileSync('c:/Users/Administrador/Downloads/fotos ejemplos/Firma_ripconciv.html', 'utf-8')
 
 const projects = [
   { code: '33014_promart-quitumbe', name: 'PROMART QUITUMBE FASE IV', weeks: 18, types: 'DRN+FOT+VID', status: 'completo', statusReason: '', hasContent: true, lastModified: '2026-07-01T10:00:00Z', coverPath: 'mock/dia.jpg' },
@@ -56,6 +57,9 @@ const marcaMeta = {
 }
 
 async function mockApis(page) {
+  // Servir el HTML de la firma cuando el preview hace fetch(sasUrl)
+  await page.route('**/mock-firma.html', (route) =>
+    route.fulfill({ status: 200, contentType: 'text/html', body: FIRMA_HTML }))
   await page.route('**/api/**', (route) => {
     const url = new URL(route.request().url())
     const p = url.pathname
@@ -75,22 +79,36 @@ async function mockApis(page) {
     if (p.startsWith('/api/media/marcas/RIPCONCIV')) {
       // Se añaden archivos no-imagen para previsualizar las miniaturas por tipo.
       const extraFiles = [
-        { name: 'RIPCONCIV-Logotipo.ai', path: '_media/marcas/RIPCONCIV/RIPCONCIV-Logotipo.ai', size: 2_400_000, type: 'ai', lastModified: '2026-07-05T09:00:00Z' },
+        // .ai cuyo nombre coincide (sufijo) con un PNG de thumbs → debe mostrar el logo
+        { name: 'RIPCONCIV_version_horizontal_positivo_azul.ai', path: '_media/marcas/RIPCONCIV/RIPCONCIV_version_horizontal_positivo_azul.ai', size: 1_400_000, type: 'ai', lastModified: '2026-07-05T09:00:00Z' },
+        { name: 'RIPCONCIV_version_simbolo_positivo_azul.ai', path: '_media/marcas/RIPCONCIV/RIPCONCIV_version_simbolo_positivo_azul.ai', size: 1_400_000, type: 'ai', lastModified: '2026-07-05T09:00:00Z' },
         { name: 'Manrope.ttf', path: '_media/marcas/RIPCONCIV/Manrope.ttf', size: 167_160, type: 'font', lastModified: '2026-07-06T09:00:00Z' },
+        { name: 'Manrope.zip', path: '_media/marcas/RIPCONCIV/Manrope.zip', size: 853_542, type: 'zip', lastModified: '2026-07-06T09:00:00Z' },
         { name: 'Manual-de-marca.pdf', path: '_media/marcas/RIPCONCIV/Manual-de-marca.pdf', size: 5_100_000, type: 'pdf', lastModified: '2026-07-03T09:00:00Z' },
-        { name: 'Kit-marca.zip', path: '_media/marcas/RIPCONCIV/Kit-marca.zip', size: 12_800_000, type: 'zip', lastModified: '2026-07-04T09:00:00Z' },
       ]
       return json({ section: 'marcas', folder: 'RIPCONCIV', files: [...brandFiles, ...extraFiles], meta: marcaMeta })
+    }
+    if (p.startsWith('/api/media/documentos/Firmas')) {
+      return json({ section: 'documentos', folder: 'Firmas', files: [
+        { name: 'Firma_ripconciv.html', path: '_media/documentos/Firmas/Firma_ripconciv.html', size: 1800, type: 'html', lastModified: '2026-07-06T10:00:00Z' },
+      ], meta: null })
     }
     const mFolders = p.match(/^\/api\/media\/([^/]+)$/)
     if (mFolders) {
       const sid = mFolders[1]
       const byId = {
-        documentos: [{ name: 'Papelería', fileCount: 8, lastModified: '2026-06-30T09:00:00Z' }, { name: 'Presentaciones', fileCount: 12, lastModified: '2026-07-02T09:00:00Z' }],
+        documentos: [{ name: 'Firmas', fileCount: 1, lastModified: '2026-07-06T10:00:00Z' }, { name: 'Papelería', fileCount: 8, lastModified: '2026-06-30T09:00:00Z' }, { name: 'Presentaciones', fileCount: 12, lastModified: '2026-07-02T09:00:00Z' }],
         videos: [{ name: 'Institucional 2026', fileCount: 3, lastModified: '2026-06-10T09:00:00Z' }],
         eventos: [], redes: [],
       }
       return json({ section: sid, folders: byId[sid] || [] })
+    }
+    if (p === '/api/sas/generate') {
+      let bp = ''
+      try { bp = (route.request().postDataJSON() || {}).blobPath || '' } catch { /* sin body */ }
+      if (bp.endsWith('.ttf')) return json({ sasUrl: `${BASE}/fonts/Manrope.ttf` })
+      if (bp.endsWith('.html')) return json({ sasUrl: `${BASE}/mock-firma.html` })
+      return json({ sasUrl: `${BASE}/hero/${DAY}` })
     }
     if (p.startsWith('/api/media/')) return json({ section: 'x', folder: 'x', files: [], meta: null })
     if (p === '/api/thumb') {
@@ -137,6 +155,7 @@ const shots = [
   { name: 'marca-ripconciv-light', path: '/marcas/RIPCONCIV', theme: 'light' },
   { name: 'marca-ripconciv-dark', path: '/marcas/RIPCONCIV', theme: 'dark' },
   { name: 'documentos-light', path: '/documentos', theme: 'light' },
+  { name: 'firmas-light', path: '/documentos/Firmas', theme: 'light' },
   { name: 'upload-light', path: '/upload', theme: 'light' },
   { name: 'upload-dark', path: '/upload', theme: 'dark' },
   { name: 'accesos-light', path: '/accesos', theme: 'light' },
@@ -155,7 +174,7 @@ for (const shot of shots) {
   }, shot.theme)
   await page.goto(`${BASE}${shot.path}`, { waitUntil: 'networkidle' })
   await page.waitForTimeout(900)
-  await page.screenshot({ path: `${OUT}/${shot.name}.png`, fullPage: shot.name.startsWith('marca-') })
+  await page.screenshot({ path: `${OUT}/${shot.name}.png`, fullPage: /^(marca-|firmas)/.test(shot.name) })
   console.log('shot:', shot.name)
   await ctx.close()
 }
