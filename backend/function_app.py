@@ -1439,6 +1439,48 @@ def get_me(req: func.HttpRequest) -> func.HttpResponse:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# GET /api/debug/auth — depuración temporal de autenticación
+# ══════════════════════════════════════════════════════════════════════════════
+@app.route(route="debug/auth", methods=["GET", "OPTIONS"])
+def debug_auth(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_ok()
+
+    auth = req.headers.get("Authorization", "")
+    x_access_token = req.headers.get("X-Access-Token", "")
+    caller = get_caller(req)
+
+    token = auth or x_access_token
+    token_kind = "none"
+    claims = None
+    if token:
+        if not token.startswith("Bearer ") and token.count(".") == 2:
+            token = f"Bearer {token}"
+        if token.startswith("Bearer "):
+            token_kind = "bearer"
+            try:
+                claims = _decode_claims_unverified(token[7:].strip())
+            except Exception as exc:
+                claims = {"error": str(exc)}
+
+    return ok({
+        "authHeaderPresent": bool(auth),
+        "xAccessTokenPresent": bool(x_access_token),
+        "tokenKind": token_kind,
+        "caller": caller,
+        "claims": {
+            "tid": claims.get("tid") if isinstance(claims, dict) else None,
+            "aud": claims.get("aud") if isinstance(claims, dict) else None,
+            "scp": claims.get("scp") if isinstance(claims, dict) else None,
+            "upn": claims.get("upn") if isinstance(claims, dict) else None,
+            "preferred_username": claims.get("preferred_username") if isinstance(claims, dict) else None,
+            "name": claims.get("name") if isinstance(claims, dict) else None,
+            "error": claims.get("error") if isinstance(claims, dict) and "error" in claims else None,
+        },
+    })
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # GET/POST /api/access — configuración de accesos (solo administradores)
 # ══════════════════════════════════════════════════════════════════════════════
 @app.route(route="access", methods=["GET", "POST", "OPTIONS"])
