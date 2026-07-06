@@ -691,12 +691,18 @@ code { font-family: var(--font-mono); background: var(--bg3); padding: 2px 6px; 
 /* Crear carpeta / subir a la biblioteca */
 .media-add {
   display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 20px;
+}
+.media-add-row {
+  display: flex;
   gap: 10px;
   align-items: center;
   flex-wrap: wrap;
-  margin-bottom: 20px;
 }
 .media-add .search-input { max-width: 340px; flex: none; }
+.media-add-hint { font-size: 0.8rem; color: var(--text-muted, #6b7280); margin: 0; }
 .media-add-msg { font-size: 0.8rem; }
 .media-add-msg.ok { color: var(--green); }
 .media-add-msg.error { color: var(--red); }

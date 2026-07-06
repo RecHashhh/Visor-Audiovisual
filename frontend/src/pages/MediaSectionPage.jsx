@@ -2,7 +2,7 @@
 // Explorador genérico de una sección de biblioteca (_media/<section>/): lista sus
 // carpetas y permite crear nuevas (a quien tenga la capacidad manageMedia).
 // Sirve para Marcas, Documentos, Videos, Eventos y Redes.
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../utils/api'
 import { useAuthz, hasCap, canItem } from '../utils/authz'
@@ -39,6 +39,7 @@ export default function MediaSectionPage({ sectionId }) {
   const [newName, setNewName] = useState('')
   const [creating, setCreating] = useState(false)
   const [msg, setMsg] = useState(null)
+  const inputRef = useRef(null)
 
   function load() {
     setError(null)
@@ -50,7 +51,13 @@ export default function MediaSectionPage({ sectionId }) {
 
   async function create() {
     const name = newName.trim()
-    if (!name) return
+    if (!name) {
+      // Antes el botón quedaba deshabilitado y el clic "no hacía nada"; ahora
+      // guiamos al usuario al campo en vez de fallar en silencio.
+      setMsg({ ok: false, text: 'Escribe primero el nombre en el campo de la izquierda.' })
+      inputRef.current?.focus()
+      return
+    }
     setCreating(true); setMsg(null)
     try {
       await api.createMediaFolder(sectionId, name)
@@ -73,13 +80,19 @@ export default function MediaSectionPage({ sectionId }) {
 
       {canCreate && (
         <div className="media-add">
-          <input className="search-input"
-            placeholder={NEW_PLACEHOLDER[sectionId] || NEW_PLACEHOLDER.default}
-            value={newName} onChange={e => setNewName(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && !creating && create()} />
-          <button className="btn btn-primary" onClick={create} disabled={creating || !newName.trim()}>
-            {creating ? 'Creando...' : (NEW_LABEL[sectionId] || 'Nueva carpeta')}
-          </button>
+          <div className="media-add-row">
+            <input ref={inputRef} className="search-input"
+              aria-label={NEW_LABEL[sectionId] || 'Nueva carpeta'}
+              placeholder={NEW_PLACEHOLDER[sectionId] || NEW_PLACEHOLDER.default}
+              value={newName} onChange={e => setNewName(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && !creating && create()} />
+            <button className="btn btn-primary" onClick={create} disabled={creating}>
+              {creating ? 'Creando...' : (NEW_LABEL[sectionId] || 'Nueva carpeta')}
+            </button>
+          </div>
+          <p className="media-add-hint">
+            Escribe el nombre y crea la carpeta; luego entra en ella para subir sus archivos.
+          </p>
           {msg && <span className={`media-add-msg ${msg.ok ? 'ok' : 'error'}`}>{msg.text}</span>}
         </div>
       )}
