@@ -49,6 +49,12 @@ async function downloadFile(path, fileName) {
 function fmtSize(bytes) {
   return bytes > 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`
 }
+function fmtDate(iso) {
+  if (!iso) return ''
+  try {
+    return new Date(iso).toLocaleDateString('es-EC', { day: 'numeric', month: 'short', year: 'numeric' })
+  } catch { return '' }
+}
 
 export default function MediaFolderPage({ sectionId }) {
   const section = sectionById(sectionId)
@@ -79,6 +85,22 @@ export default function MediaFolderPage({ sectionId }) {
   const otherFiles = files.filter(f => !variantPaths.has(f.path))
   const otherImages = otherFiles.filter(f => isImage(f.name))
   const otherDocs = otherFiles.filter(f => !isImage(f.name))
+
+  // Lista maestra de imágenes de la carpeta (variantes + otras imágenes) para el
+  // visor grande: al abrir una, las flechas recorren TODAS en orden alfabético.
+  const imageFiles = useMemo(
+    () => files.filter(f => isImage(f.name)).map(f => ({ ...f, isLogo: variantPaths.has(f.path) })),
+    [files, variantPaths]
+  )
+  const [viewer, setViewer] = useState(-1)
+  const openViewer = (path) => {
+    const i = imageFiles.findIndex(f => f.path === path)
+    if (i >= 0) setViewer(i)
+  }
+  const moveViewer = (delta) => setViewer(i => {
+    const n = i + delta
+    return n >= 0 && n < imageFiles.length ? n : i
+  })
   const meta = data?.meta
   const hasFilters = format !== 'all' || background !== 'all' || color !== 'all'
 
@@ -203,7 +225,7 @@ export default function MediaFolderPage({ sectionId }) {
                 return (
                   <section key={fo} className="logo-group">
                     <h2 className="logo-group-title">{FORMAT_LABEL[fo]}<span className="logo-group-count">{group.length}</span></h2>
-                    <div className="logo-grid">{group.map(v => <LogoTile key={v.path} variant={v} brandName={meta?.name || folder} />)}</div>
+                    <div className="logo-grid">{group.map(v => <LogoTile key={v.path} variant={v} brandName={meta?.name || folder} onOpen={openViewer} />)}</div>
                   </section>
                 )
               })}
@@ -213,7 +235,7 @@ export default function MediaFolderPage({ sectionId }) {
       {otherImages.length > 0 && (
         <section className="logo-group">
           <h2 className="logo-group-title">{variants.length > 0 ? 'Otras imágenes' : 'Imágenes'}<span className="logo-group-count">{otherImages.length}</span></h2>
-          <div className="media-img-grid">{otherImages.map(f => <ImageTile key={f.path} file={f} />)}</div>
+          <div className="media-img-grid">{otherImages.map(f => <ImageTile key={f.path} file={f} onOpen={openViewer} />)}</div>
         </section>
       )}
 
@@ -223,7 +245,61 @@ export default function MediaFolderPage({ sectionId }) {
           <div className="media-file-list">{otherDocs.map(f => <MediaFileRow key={f.path} file={f} />)}</div>
         </section>
       )}
+
+      {viewer >= 0 && imageFiles[viewer] && (
+        <Lightbox images={imageFiles} index={viewer} onClose={() => setViewer(-1)} onMove={moveViewer} />
+      )}
     </>
+  )
+}
+
+function Lightbox({ images, index, onClose, onMove }) {
+  const img = images[index]
+  const [src, setSrc] = useState(null)
+  useEffect(() => {
+    if (!img) return
+    let alive = true
+    setSrc(null)
+    fetchThumb(img.path, { w: 1600, mode: img.isLogo ? 'logo' : '' })
+      .then(url => { if (alive) setSrc(url) }).catch(() => {})
+    return () => { alive = false }
+  }, [img?.path]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key === 'Escape') onClose()
+      else if (e.key === 'ArrowLeft') onMove(-1)
+      else if (e.key === 'ArrowRight') onMove(1)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose, onMove])
+  if (!img) return null
+  const name = img.name.split('/').pop()
+  const hasPrev = index > 0
+  const hasNext = index < images.length - 1
+  return (
+    <div className="lightbox" onClick={onClose} role="dialog" aria-modal="true" aria-label={name}>
+      <button className="lightbox-close" onClick={onClose} aria-label="Cerrar (Esc)">×</button>
+      <button className="lightbox-nav prev" onClick={e => { e.stopPropagation(); onMove(-1) }}
+        disabled={!hasPrev} aria-label="Anterior (←)">‹</button>
+      <figure className="lightbox-stage" onClick={e => e.stopPropagation()}>
+        <div className="lightbox-img-wrap">
+          {src ? <img src={src} alt={name} /> : <div className="spinner" />}
+        </div>
+        <figcaption className="lightbox-caption">
+          <span className="lightbox-name">{name}</span>
+          <span className="lightbox-meta">
+            {img.lastModified && <span>Subido el {fmtDate(img.lastModified)}</span>}
+            <button className="lightbox-download" onClick={() => downloadFile(img.path, name).catch(() => {})}>
+              Descargar original
+            </button>
+          </span>
+        </figcaption>
+      </figure>
+      <button className="lightbox-nav next" onClick={e => { e.stopPropagation(); onMove(1) }}
+        disabled={!hasNext} aria-label="Siguiente (→)">›</button>
+      <div className="lightbox-counter">{index + 1} / {images.length}</div>
+    </div>
   )
 }
 
@@ -253,7 +329,7 @@ function sampleCornerColor(imgEl) {
   } catch { return null }
 }
 
-function LogoTile({ variant: v, brandName }) {
+function LogoTile({ variant: v, brandName, onOpen }) {
   const [src, setSrc] = useState(null)
   const [bg, setBg] = useState(null)
   const [loaded, setLoaded] = useState(false)
@@ -265,15 +341,16 @@ function LogoTile({ variant: v, brandName }) {
   const stageBg = bg || (v.color === 'b' ? '#14161f' : null)
   return (
     <div className="logo-tile">
-      <div className="logo-tile-preview" style={stageBg ? { background: stageBg } : undefined}>
+      <button type="button" className="logo-tile-preview media-open" style={stageBg ? { background: stageBg } : undefined}
+        onClick={() => onOpen?.(v.path)} aria-label={`Ver ${v.formatLabel} en grande`}>
         {src && <img className={`img-fade ${loaded ? 'is-loaded' : ''}`} src={src}
           alt={`${brandName} — ${v.formatLabel}, ${v.backgroundLabel}, ${v.colorLabel}`}
           onLoad={e => { setBg(sampleCornerColor(e.target)); setLoaded(true) }} />}
-      </div>
+      </button>
       <div className="logo-tile-caption">
         <div className="logo-tile-info">
           <span className="logo-tile-name">{v.backgroundLabel} · {v.colorLabel}</span>
-          <span className="logo-tile-meta">PNG · alta resolución</span>
+          <span className="logo-tile-meta">{v.lastModified ? `PNG · ${fmtDate(v.lastModified)}` : 'PNG · alta resolución'}</span>
         </div>
         <button className="icon-btn" onClick={() => downloadFile(v.path, v.name).catch(() => {})} title="Descargar original" aria-label={`Descargar ${v.formatLabel}`}>
           <DownloadIcon />
@@ -283,7 +360,7 @@ function LogoTile({ variant: v, brandName }) {
   )
 }
 
-function ImageTile({ file: f }) {
+function ImageTile({ file: f, onOpen }) {
   const [src, setSrc] = useState(null)
   const [loaded, setLoaded] = useState(false)
   useEffect(() => {
@@ -293,11 +370,14 @@ function ImageTile({ file: f }) {
   }, [f.path])
   return (
     <div className="media-img-tile">
-      <div className="media-img-preview">
+      <button type="button" className="media-img-preview media-open" onClick={() => onOpen?.(f.path)} aria-label={`Ver ${f.name.split('/').pop()} en grande`}>
         {src && <img className={`img-fade ${loaded ? 'is-loaded' : ''}`} src={src} alt={f.name} loading="lazy" onLoad={() => setLoaded(true)} />}
-      </div>
+      </button>
       <div className="media-img-caption">
-        <span className="media-img-name" title={f.name}>{f.name.split('/').pop()}</span>
+        <div className="media-img-info">
+          <span className="media-img-name" title={f.name}>{f.name.split('/').pop()}</span>
+          {f.lastModified && <span className="media-img-date">{fmtDate(f.lastModified)}</span>}
+        </div>
         <button className="icon-btn" onClick={() => downloadFile(f.path, f.name.split('/').pop()).catch(() => {})} title="Descargar" aria-label={`Descargar ${f.name}`}>
           <DownloadIcon />
         </button>
@@ -310,7 +390,7 @@ function MediaFileRow({ file: f }) {
   return (
     <div className="media-file-row">
       <span className="media-file-name">{f.name}</span>
-      <span className="media-file-meta">{fmtSize(f.size)}</span>
+      <span className="media-file-meta">{fmtSize(f.size)}{f.lastModified ? ` · ${fmtDate(f.lastModified)}` : ''}</span>
       <button className="icon-btn" onClick={() => downloadFile(f.path, f.name.split('/').pop()).catch(() => {})} title="Descargar" aria-label={`Descargar ${f.name}`}>
         <DownloadIcon />
       </button>

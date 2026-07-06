@@ -1989,7 +1989,53 @@ code { font-family: var(--font-mono); background: var(--bg3); padding: 2px 6px; 
 .media-img-preview { aspect-ratio: 4/3; background: var(--bg3); display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .media-img-preview img { width: 100%; height: 100%; object-fit: cover; }
 .media-img-caption { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--border); }
-.media-img-name { flex: 1; min-width: 0; font-size: 0.76rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.media-img-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.media-img-name { min-width: 0; font-size: 0.76rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.media-img-date { font-size: 0.68rem; color: var(--text-muted, #6b7280); }
+
+/* Imagen clicable → abre el visor grande (lightbox). Reset del botón. */
+.media-open {
+  appearance: none; -webkit-appearance: none;
+  border: 0; font: inherit; color: inherit; width: 100%;
+  cursor: zoom-in;
+}
+.media-open img { transition: transform var(--transition); }
+.media-open:hover img { transform: scale(1.04); }
+
+/* ── Visor grande (lightbox) ─────────────────────────────── */
+.lightbox {
+  position: fixed; inset: 0; z-index: 100;
+  background: rgba(10, 12, 18, 0.88);
+  display: flex; align-items: center; justify-content: center;
+  padding: 4vh 5vw;
+  backdrop-filter: blur(2px);
+}
+.lightbox-stage { margin: 0; max-width: 100%; max-height: 100%; display: flex; flex-direction: column; gap: 12px; align-items: center; }
+.lightbox-img-wrap { display: flex; align-items: center; justify-content: center; min-height: 40vh; }
+.lightbox-img-wrap img { max-width: 84vw; max-height: 80vh; object-fit: contain; border-radius: 8px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5); }
+.lightbox-caption { display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center; color: #eef1f7; }
+.lightbox-name { font-size: 0.9rem; font-weight: 600; }
+.lightbox-meta { display: flex; align-items: center; gap: 12px; font-size: 0.8rem; color: #aeb6c6; }
+.lightbox-download { background: none; border: 0; color: #8ab4ff; cursor: pointer; font: inherit; text-decoration: underline; padding: 0; }
+.lightbox-close {
+  position: absolute; top: 16px; right: 20px;
+  width: 40px; height: 40px; border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12); border: 0; color: #fff;
+  font-size: 1.6rem; line-height: 1; cursor: pointer;
+}
+.lightbox-close:hover { background: rgba(255, 255, 255, 0.24); }
+.lightbox-nav {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  width: 52px; height: 52px; border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12); border: 0; color: #fff;
+  font-size: 2rem; line-height: 1; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.lightbox-nav:hover:not(:disabled) { background: rgba(255, 255, 255, 0.24); }
+.lightbox-nav:disabled { opacity: 0.22; cursor: default; }
+.lightbox-nav.prev { left: 16px; }
+.lightbox-nav.next { right: 16px; }
+.lightbox-counter { position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%); font-size: 0.8rem; color: #aeb6c6; }
 
 /* ── RESPONSIVE ─────────────────────────────────────────── */
 @media (max-width: 900px) {
