@@ -1550,7 +1550,11 @@ def debug_auth(req: func.HttpRequest) -> func.HttpResponse:
             "scp": claims.get("scp") if isinstance(claims, dict) else None,
             "upn": claims.get("upn") if isinstance(claims, dict) else None,
             "preferred_username": claims.get("preferred_username") if isinstance(claims, dict) else None,
+            "unique_name": claims.get("unique_name") if isinstance(claims, dict) else None,
+            "oid": claims.get("oid") if isinstance(claims, dict) else None,
+            "sub": claims.get("sub") if isinstance(claims, dict) else None,
             "name": claims.get("name") if isinstance(claims, dict) else None,
+            "claimKeys": sorted(claims.keys()) if isinstance(claims, dict) else [],
             "error": claims.get("error") if isinstance(claims, dict) and "error" in claims else None,
         },
     })
