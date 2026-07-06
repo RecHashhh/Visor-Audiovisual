@@ -746,6 +746,11 @@ ROLE_CAPS = {
     "viewer":   {c: False for c in CAPS},
 }
 
+# Usuario "normal": cualquiera que inicie sesión y NO esté listado en Accesos
+# (modo abierto) entra como viewer y ve SOLO estas secciones, sin poder subir
+# ni gestionar nada. El admin puede ampliar por persona desde la página Accesos.
+DEFAULT_GUEST_SECTIONS = ["marcas"]
+
 def _caps_from(role: str, overrides: Any) -> dict:
     caps = dict(ROLE_CAPS.get(role, ROLE_CAPS["viewer"]))
     if isinstance(overrides, dict):
@@ -828,8 +833,10 @@ def effective_perms(caller: Optional[Dict[str, str]]) -> dict:
     if restricted:
         return _perms(email, name, None, dict(ROLE_CAPS["viewer"]), [], {}, True, False, allowed=False)
 
-    # Config existe pero abierta: los no listados ven todo pero no gestionan.
-    return _perms(email, name, "viewer", dict(ROLE_CAPS["viewer"]), "*", {}, False, False)
+    # Config existe pero abierta: los no listados entran como usuario normal
+    # (viewer) y ven solo las secciones por defecto, sin poder subir ni gestionar.
+    return _perms(email, name, "viewer", dict(ROLE_CAPS["viewer"]),
+                  list(DEFAULT_GUEST_SECTIONS), {}, False, False)
 
 def perms_allow_section(perms: dict, section: str) -> bool:
     if perms.get("isManager"):
