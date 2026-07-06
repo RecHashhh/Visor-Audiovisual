@@ -218,10 +218,6 @@ export default function MediaFolderPage({ sectionId }) {
         </div>
       )}
 
-      {brandColors.length > 0 && <BrandColors colors={brandColors} />}
-
-      {fontFiles.length > 0 && <Typography fonts={fontFiles} />}
-
       {files.length === 0 && (
         <div className="empty">
           <div className="empty-text">Esta carpeta aún no tiene archivos</div>
@@ -284,6 +280,10 @@ export default function MediaFolderPage({ sectionId }) {
           <div className="media-img-grid">{otherImages.map(f => <ImageTile key={f.path} file={f} onOpen={openViewer} />)}</div>
         </section>
       )}
+
+      {brandColors.length > 0 && <BrandColors colors={brandColors} />}
+
+      {fontFiles.length > 0 && <Typography fonts={fontFiles} />}
 
       {htmlFiles.length > 0 && <HtmlPreviews files={htmlFiles} />}
 
