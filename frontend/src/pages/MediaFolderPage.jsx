@@ -23,6 +23,16 @@ const IMG_EXT = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'tif', 'tiff']
 
 const isImage = (name) => IMG_EXT.includes((name.split('.').pop() || '').toLowerCase())
 
+// Paleta oficial por defecto para marcas conocidas (mientras marca.json no traiga
+// su propio `colors`). Clave = nombre de carpeta en minúsculas.
+const DEFAULT_BRAND_COLORS = {
+  ripconciv: [
+    { hex: '#1E3FAA', name: 'Ripconciv Blue', role: 'Color primario' },
+    { hex: '#0E1F5C', name: 'Deep Navy', role: 'Fondos y soportes' },
+    { hex: '#EAEEF8', name: 'Blanco', role: 'Superficies suaves' },
+  ],
+}
+
 function parseVariant(file) {
   if (file.name.includes('/')) return null
   const m = file.name.toLowerCase().replace(/\.[^.]+$/, '').match(VARIANT_RE)
@@ -103,6 +113,13 @@ export default function MediaFolderPage({ sectionId }) {
   })
   const meta = data?.meta
   const hasFilters = format !== 'all' || background !== 'all' || color !== 'all'
+  // Paleta de la marca (solo en Marcas): de marca.json (meta.colors) o, si no
+  // hay, la paleta oficial por defecto para marcas conocidas (p. ej. RIPCONCIV).
+  const brandColors = useMemo(() => {
+    if (!isMarcas) return []
+    if (Array.isArray(meta?.colors) && meta.colors.length) return meta.colors
+    return DEFAULT_BRAND_COLORS[(meta?.name || folder).toLowerCase()] || []
+  }, [isMarcas, meta, folder])
 
   const filtered = variants.filter(v =>
     (format === 'all' || v.format === format) &&
@@ -176,6 +193,8 @@ export default function MediaFolderPage({ sectionId }) {
         </div>
       )}
 
+      {brandColors.length > 0 && <BrandColors colors={brandColors} />}
+
       {files.length === 0 && (
         <div className="empty">
           <div className="empty-text">Esta carpeta aún no tiene archivos</div>
@@ -242,7 +261,7 @@ export default function MediaFolderPage({ sectionId }) {
       {otherDocs.length > 0 && (
         <section className="logo-group">
           <h2 className="logo-group-title">Archivos<span className="logo-group-count">{otherDocs.length}</span></h2>
-          <div className="media-file-list">{otherDocs.map(f => <MediaFileRow key={f.path} file={f} />)}</div>
+          <div className="media-img-grid">{otherDocs.map(f => <FileTile key={f.path} file={f} />)}</div>
         </section>
       )}
 
@@ -386,15 +405,85 @@ function ImageTile({ file: f, onOpen }) {
   )
 }
 
-function MediaFileRow({ file: f }) {
+// Paleta de la marca: swatches con hex, clic para copiar.
+function BrandColors({ colors }) {
+  const [copied, setCopied] = useState(null)
+  function copy(hex) {
+    navigator.clipboard?.writeText(hex).then(() => {
+      setCopied(hex)
+      setTimeout(() => setCopied(c => (c === hex ? null : c)), 1200)
+    }).catch(() => {})
+  }
   return (
-    <div className="media-file-row">
-      <span className="media-file-name">{f.name}</span>
-      <span className="media-file-meta">{fmtSize(f.size)}{f.lastModified ? ` · ${fmtDate(f.lastModified)}` : ''}</span>
-      <button className="icon-btn" onClick={() => downloadFile(f.path, f.name.split('/').pop()).catch(() => {})} title="Descargar" aria-label={`Descargar ${f.name}`}>
-        <DownloadIcon />
-      </button>
+    <section className="brand-colors">
+      <h2 className="logo-group-title">Colores de marca<span className="logo-group-count">{colors.length}</span></h2>
+      <div className="brand-color-grid">
+        {colors.map(c => (
+          <button key={c.hex} type="button" className="brand-color-card" onClick={() => copy(c.hex)}
+            title={`Copiar ${c.hex}`}>
+            <span className="brand-color-swatch" style={{ background: c.hex }} aria-hidden="true" />
+            <span className="brand-color-info">
+              <span className="brand-color-hex">{copied === c.hex ? '¡Copiado!' : c.hex}</span>
+              {c.name && <span className="brand-color-name">{c.name}</span>}
+              {c.role && <span className="brand-color-role">{c.role}</span>}
+            </span>
+          </button>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+// Tipo de archivo no-imagen → monograma + color, para que se vea como miniatura.
+const FILE_KINDS = {
+  ai:   { badge: 'AI',   glyph: 'Ai',  tint: '#ff7a00', bg: '#2a1a06' },
+  eps:  { badge: 'EPS',  glyph: 'Ai',  tint: '#ff7a00', bg: '#2a1a06' },
+  psd:  { badge: 'PSD',  glyph: 'Ps',  tint: '#31a8ff', bg: '#001e36' },
+  pdf:  { badge: 'PDF',  glyph: 'PDF', tint: '#ff5b5b', bg: '#2a0d0d' },
+  indd: { badge: 'INDD', glyph: 'Id',  tint: '#ff3f8b', bg: '#2a0a1a' },
+  zip:  { badge: 'ZIP',  glyph: '',    tint: '#d6b24a', bg: '#211d10' },
+  rar:  { badge: 'RAR',  glyph: '',    tint: '#d6b24a', bg: '#211d10' },
+  '7z': { badge: '7Z',   glyph: '',    tint: '#d6b24a', bg: '#211d10' },
+  ttf:  { badge: 'TTF',  glyph: 'Aa',  tint: '#8ab4ff', bg: '#0e1230' },
+  otf:  { badge: 'OTF',  glyph: 'Aa',  tint: '#8ab4ff', bg: '#0e1230' },
+  woff: { badge: 'WOFF', glyph: 'Aa',  tint: '#8ab4ff', bg: '#0e1230' },
+  woff2:{ badge: 'WOFF', glyph: 'Aa',  tint: '#8ab4ff', bg: '#0e1230' },
+}
+function fileKind(name) {
+  const ext = (name.split('.').pop() || '').toLowerCase()
+  return FILE_KINDS[ext] || { badge: (ext || 'FILE').toUpperCase().slice(0, 4), glyph: '', tint: '#9aa3b8', bg: '#161821' }
+}
+
+function FileTile({ file: f }) {
+  const name = f.name.split('/').pop()
+  const k = fileKind(name)
+  return (
+    <div className="media-img-tile">
+      <div className="file-tile-preview" style={{ background: k.bg }}>
+        {k.glyph
+          ? <span className="file-tile-glyph" style={{ color: k.tint }}>{k.glyph}</span>
+          : <DocIcon color={k.tint} />}
+        <span className="file-tile-badge" style={{ background: k.tint }}>{k.badge}</span>
+      </div>
+      <div className="media-img-caption">
+        <div className="media-img-info">
+          <span className="media-img-name" title={name}>{name}</span>
+          <span className="media-img-date">{fmtSize(f.size)}{f.lastModified ? ` · ${fmtDate(f.lastModified)}` : ''}</span>
+        </div>
+        <button className="icon-btn" onClick={() => downloadFile(f.path, name).catch(() => {})} title="Descargar" aria-label={`Descargar ${name}`}>
+          <DownloadIcon />
+        </button>
+      </div>
     </div>
+  )
+}
+
+function DocIcon({ color }) {
+  return (
+    <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M7 3h7l4 4v14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" />
+      <path d="M14 3v4h4" />
+    </svg>
   )
 }
 

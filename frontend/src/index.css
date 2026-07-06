@@ -1,6 +1,16 @@
 /* ── RESET & ROOT ─────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* Tipografía de marca RIPCONCIV: Manrope, auto-hospedada (fuente variable, un
+   solo archivo con todos los pesos 200–800). No depende de ningún CDN. */
+@font-face {
+  font-family: 'Manrope';
+  src: url('/fonts/Manrope.ttf') format('truetype');
+  font-weight: 200 800;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   /* Chrome del producto: tema claro. El "escenario" de fotos/video (lightbox,
      visor de galería, reproductor) se queda oscuro a propósito — ver esas reglas. */
@@ -36,8 +46,8 @@
   --blue-bd:      rgba(29,78,216,0.2);
   --radius:       6px;
   --radius-lg:    10px;
-  --font-display: 'Inter', sans-serif;
-  --font-body:    'Inter', sans-serif;
+  --font-display: 'Manrope', 'Inter', sans-serif;
+  --font-body:    'Manrope', 'Inter', sans-serif;
   --font-mono:    'IBM Plex Mono', monospace;
   --shadow:       0 1px 2px rgba(20,22,40,0.04), 0 2px 8px rgba(20,22,40,0.06);
   --shadow-lg:    0 12px 32px rgba(20,22,40,0.12);
@@ -2026,6 +2036,27 @@ code { font-family: var(--font-mono); background: var(--bg3); padding: 2px 6px; 
 .media-img-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .media-img-name { min-width: 0; font-size: 0.76rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .media-img-date { font-size: 0.68rem; color: var(--text-muted, #6b7280); }
+
+/* Miniatura de archivo no-imagen (.ai, fuentes, zip, pdf…): monograma + badge */
+.file-tile-preview { position: relative; aspect-ratio: 4/3; display: flex; align-items: center; justify-content: center; }
+.file-tile-glyph { font-family: var(--font-display); font-size: 2.3rem; font-weight: 800; letter-spacing: 0.01em; line-height: 1; }
+.file-tile-badge { position: absolute; bottom: 8px; right: 8px; font-size: 0.58rem; font-weight: 700; color: #fff; padding: 2px 6px; border-radius: 4px; letter-spacing: 0.05em; }
+
+/* Paleta de colores de la marca (solo en Marcas) */
+.brand-colors { margin: 8px 0 28px; }
+.brand-color-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-top: 12px; }
+.brand-color-card {
+  display: flex; align-items: stretch; gap: 0; text-align: left;
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  overflow: hidden; background: var(--bg2); cursor: pointer; padding: 0;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+.brand-color-card:hover { border-color: var(--border-hi); box-shadow: var(--shadow); }
+.brand-color-swatch { width: 76px; flex: none; border-right: 1px solid var(--border); }
+.brand-color-info { display: flex; flex-direction: column; justify-content: center; gap: 1px; padding: 12px 14px; min-width: 0; }
+.brand-color-hex { font-family: var(--font-mono); font-size: 0.82rem; font-weight: 600; color: var(--text); }
+.brand-color-name { font-size: 0.86rem; font-weight: 600; color: var(--text); }
+.brand-color-role { font-size: 0.76rem; color: var(--text-dim); }
 
 /* Imagen clicable → abre el visor grande (lightbox). Reset del botón. */
 .media-open {

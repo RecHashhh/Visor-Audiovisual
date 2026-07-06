@@ -34,6 +34,12 @@ function clearCachedByPrefixes(prefixes = []) {
 }
 
 async function getToken() {
+  // Bypass SOLO en desarrollo para las capturas/preview (dev-preview): sin cuenta
+  // MSAL devuelve un token ficticio y las APIs quedan mockeadas por Playwright.
+  // En el build de producción import.meta.env.DEV es false, así que no aplica.
+  if (import.meta.env.DEV && typeof localStorage !== 'undefined' && localStorage.getItem('ripcon-dev-preview') === '1') {
+    return 'dev-preview-token'
+  }
   const account = msalInstance.getActiveAccount()
   if (!account) throw new Error('No active account')
   try {

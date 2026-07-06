@@ -73,7 +73,14 @@ async function mockApis(page) {
       ] })
     }
     if (p.startsWith('/api/media/marcas/RIPCONCIV')) {
-      return json({ section: 'marcas', folder: 'RIPCONCIV', files: brandFiles, meta: marcaMeta })
+      // Se añaden archivos no-imagen para previsualizar las miniaturas por tipo.
+      const extraFiles = [
+        { name: 'RIPCONCIV-Logotipo.ai', path: '_media/marcas/RIPCONCIV/RIPCONCIV-Logotipo.ai', size: 2_400_000, type: 'ai', lastModified: '2026-07-05T09:00:00Z' },
+        { name: 'Manrope.ttf', path: '_media/marcas/RIPCONCIV/Manrope.ttf', size: 167_160, type: 'font', lastModified: '2026-07-06T09:00:00Z' },
+        { name: 'Manual-de-marca.pdf', path: '_media/marcas/RIPCONCIV/Manual-de-marca.pdf', size: 5_100_000, type: 'pdf', lastModified: '2026-07-03T09:00:00Z' },
+        { name: 'Kit-marca.zip', path: '_media/marcas/RIPCONCIV/Kit-marca.zip', size: 12_800_000, type: 'zip', lastModified: '2026-07-04T09:00:00Z' },
+      ]
+      return json({ section: 'marcas', folder: 'RIPCONCIV', files: [...brandFiles, ...extraFiles], meta: marcaMeta })
     }
     const mFolders = p.match(/^\/api\/media\/([^/]+)$/)
     if (mFolders) {
@@ -127,6 +134,8 @@ const shots = [
   { name: 'home-light', path: '/', theme: 'light' },
   { name: 'proyectos-light', path: '/proyectos', theme: 'light' },
   { name: 'marcas-light', path: '/marcas', theme: 'light' },
+  { name: 'marca-ripconciv-light', path: '/marcas/RIPCONCIV', theme: 'light' },
+  { name: 'marca-ripconciv-dark', path: '/marcas/RIPCONCIV', theme: 'dark' },
   { name: 'documentos-light', path: '/documentos', theme: 'light' },
   { name: 'upload-light', path: '/upload', theme: 'light' },
   { name: 'upload-dark', path: '/upload', theme: 'dark' },
@@ -146,7 +155,7 @@ for (const shot of shots) {
   }, shot.theme)
   await page.goto(`${BASE}${shot.path}`, { waitUntil: 'networkidle' })
   await page.waitForTimeout(900)
-  await page.screenshot({ path: `${OUT}/${shot.name}.png` })
+  await page.screenshot({ path: `${OUT}/${shot.name}.png`, fullPage: shot.name.startsWith('marca-') })
   console.log('shot:', shot.name)
   await ctx.close()
 }
