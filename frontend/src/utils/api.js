@@ -36,13 +36,31 @@ function clearCachedByPrefixes(prefixes = []) {
 async function getToken() {
   const account = msalInstance.getActiveAccount()
   if (!account) throw new Error('No active account')
-  try {
-    const res = await msalInstance.acquireTokenSilent({ ...apiRequest, account })
-    return res.accessToken
-  } catch {
-    const res = await msalInstance.acquireTokenPopup({ ...apiRequest, account })
-    return res.accessToken
+  const requestedScopes = apiRequest.scopes || ['User.Read']
+  const fallbackScopes = ['User.Read']
+  const scopeSets = [requestedScopes]
+
+  if (requestedScopes.join(' ') !== fallbackScopes.join(' ')) {
+    scopeSets.push(fallbackScopes)
   }
+
+  let lastError = null
+  for (const scopes of scopeSets) {
+    try {
+      const res = await msalInstance.acquireTokenSilent({ scopes, account })
+      return res.accessToken
+    } catch (silentError) {
+      lastError = silentError
+      try {
+        const res = await msalInstance.acquireTokenPopup({ scopes, account })
+        return res.accessToken
+      } catch (popupError) {
+        lastError = popupError
+      }
+    }
+  }
+
+  throw lastError || new Error('Unable to acquire access token')
 }
 
 async function apiFetch(path, options = {}, cacheKey = null) {
@@ -55,6 +73,9 @@ async function apiFetch(path, options = {}, cacheKey = null) {
   }
 
   const token = await getToken().catch(() => null)
+  if (!token) {
+    throw new Error(`API ${path} → no access token available`)
+  }
   const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) }
   if (token) headers['Authorization'] = `Bearer ${token}`
   const res = await fetch(path, { ...options, headers })
@@ -71,6 +92,9 @@ async function apiFetch(path, options = {}, cacheKey = null) {
 
 async function apiFetchBlob(path, options = {}) {
   const token = await getToken().catch(() => null)
+  if (!token) {
+    throw new Error(`API ${path} → no access token available`)
+  }
   const headers = { ...(options.headers || {}) }
   if (token) headers['Authorization'] = `Bearer ${token}`
   const res = await fetch(path, { ...options, headers })
@@ -80,6 +104,9 @@ async function apiFetchBlob(path, options = {}) {
 
 async function apiFetchForm(path, formData) {
   const token = await getToken().catch(() => null)
+  if (!token) {
+    throw new Error(`API ${path} → no access token available`)
+  }
   const headers = {}
   if (token) headers['Authorization'] = `Bearer ${token}`
   // Sin Content-Type manual: el navegador arma el boundary del multipart
