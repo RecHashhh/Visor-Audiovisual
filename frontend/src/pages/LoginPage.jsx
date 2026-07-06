@@ -27,32 +27,48 @@ export default function LoginPage() {
 
   return (
     <div className="login-screen">
-      <div className="login-card">
-        <img
-          className="login-logo-img only-light"
-          src="/brands/ripconciv/thumbs/horizontal-positivo-azul.png"
-          alt="RIPCONCIV"
-        />
-        <img
-          className="login-logo-img only-dark"
-          src="/brands/ripconciv/wordmark-white.png"
-          alt="RIPCONCIV"
-        />
-        <div className="login-subtitle">
-          Hub Audiovisual — material de obra, marcas y contenido de la empresa
-        </div>
+      <div className="login-shell">
+        <aside className="login-brand">
+          <div className="login-brand-photo" aria-hidden="true" />
+          <div className="login-brand-body">
+            <span className="login-brand-eyebrow">Hub Audiovisual</span>
+            <h2 className="login-brand-title">Todo el contenido de la empresa, en un solo lugar.</h2>
+            <ul className="login-brand-points">
+              <li>Fotos y video de obra</li>
+              <li>Logos y marcas oficiales</li>
+              <li>Documentos y plantillas</li>
+            </ul>
+          </div>
+        </aside>
 
-        <button
-          className="login-btn"
-          onClick={() => instance.loginRedirect(loginRequest)}
-          disabled={inProgress !== InteractionStatus.None}
-        >
-          <MsIcon />
-          Iniciar sesión con Microsoft
-        </button>
+        <div className="login-card">
+          <img
+            className="login-logo-img only-light"
+            src="/brands/ripconciv/thumbs/horizontal-positivo-azul.png"
+            alt="RIPCONCIV"
+          />
+          <img
+            className="login-logo-img only-dark"
+            src="/brands/ripconciv/wordmark-white.png"
+            alt="RIPCONCIV"
+          />
+          <h1 className="login-title">Bienvenido</h1>
+          <p className="login-subtitle">
+            Inicia sesión con tu cuenta corporativa para entrar al hub.
+          </p>
 
-        <div className="login-note">
-          Requiere cuenta corporativa Microsoft 365
+          <button
+            className="login-btn"
+            onClick={() => instance.loginRedirect(loginRequest)}
+            disabled={inProgress !== InteractionStatus.None}
+          >
+            <MsIcon />
+            Iniciar sesión con Microsoft
+          </button>
+
+          <div className="login-note">
+            Requiere cuenta corporativa Microsoft 365
+          </div>
         </div>
       </div>
     </div>

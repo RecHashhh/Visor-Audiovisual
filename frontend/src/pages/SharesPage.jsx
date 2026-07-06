@@ -5,9 +5,9 @@ import { useEffect, useState } from 'react'
 import { api } from '../utils/api'
 
 function fmtDate(iso) {
-  if (!iso) return '—'
+  if (!iso) return '…'
   const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString('es-EC', { day: '2-digit', month: 'short', year: 'numeric' })
+  return Number.isNaN(d.getTime()) ? '…' : d.toLocaleDateString('es-EC', { day: '2-digit', month: 'short', year: 'numeric' })
 }
 
 export default function SharesPage() {

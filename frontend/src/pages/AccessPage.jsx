@@ -151,7 +151,7 @@ export default function AccessPage() {
     <>
       <div className="page-header">
         <h1 className="page-title">Accesos</h1>
-        <p className="page-sub">Decide quién entra, qué puede hacer y qué puede ver — hasta el nivel de cada proyecto o marca.</p>
+        <p className="page-sub">Decide quién entra, qué puede hacer y qué puede ver, hasta el nivel de cada proyecto o marca.</p>
       </div>
 
       {meta.bootstrap && (

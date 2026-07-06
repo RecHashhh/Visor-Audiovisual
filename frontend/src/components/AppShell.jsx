@@ -1,11 +1,11 @@
 // src/components/AppShell.jsx
 import { useEffect, useState } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
-import { useMsal } from '@azure/msal-react'
 import Sidebar from './Sidebar'
 import TopBar from './TopBar'
 import CommandPalette from './CommandPalette'
 import { useAuthz } from '../utils/authz'
+import { logoutLocal } from '../authConfig'
 
 const ROUTE_TITLES = [
   ['/proyectos', 'Proyectos'],
@@ -20,7 +20,6 @@ const ROUTE_TITLES = [
 ]
 
 function NoAccessScreen({ email }) {
-  const { instance } = useMsal()
   return (
     <div className="noaccess">
       <div className="noaccess-card">
@@ -31,7 +30,7 @@ function NoAccessScreen({ email }) {
           Tu cuenta <strong>{email}</strong> inició sesión correctamente, pero no está
           en la lista de accesos. Pide acceso a la persona que administra el hub.
         </p>
-        <button className="btn btn-ghost" onClick={() => instance.logoutRedirect()}>
+        <button className="btn btn-ghost" onClick={logoutLocal}>
           Cerrar sesión
         </button>
       </div>

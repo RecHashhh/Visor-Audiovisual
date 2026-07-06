@@ -344,7 +344,7 @@ function LogoTile({ variant: v, brandName, onOpen }) {
       <button type="button" className="logo-tile-preview media-open" style={stageBg ? { background: stageBg } : undefined}
         onClick={() => onOpen?.(v.path)} aria-label={`Ver ${v.formatLabel} en grande`}>
         {src && <img className={`img-fade ${loaded ? 'is-loaded' : ''}`} src={src}
-          alt={`${brandName} — ${v.formatLabel}, ${v.backgroundLabel}, ${v.colorLabel}`}
+          alt={`${brandName}: ${v.formatLabel}, ${v.backgroundLabel}, ${v.colorLabel}`}
           onLoad={e => { setBg(sampleCornerColor(e.target)); setLoaded(true) }} />}
       </button>
       <div className="logo-tile-caption">

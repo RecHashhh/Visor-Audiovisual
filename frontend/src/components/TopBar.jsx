@@ -1,13 +1,14 @@
 // src/components/TopBar.jsx
 import { useState } from 'react'
 import { useMsal } from '@azure/msal-react'
+import { logoutLocal } from '../authConfig'
 
 function currentTheme() {
   return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light'
 }
 
 export default function TopBar({ onMenuClick }) {
-  const { instance, accounts } = useMsal()
+  const { accounts } = useMsal()
   const user = accounts[0]
   const initials = user?.name?.split(' ').map(n => n[0]).slice(0,2).join('') || 'U'
   const [theme, setTheme] = useState(currentTheme)
@@ -65,7 +66,7 @@ export default function TopBar({ onMenuClick }) {
         </button>
         <span>{user?.username || user?.name}</span>
         <div className="topbar-avatar">{initials}</div>
-        <button className="btn-logout" onClick={() => instance.logoutRedirect()}>
+        <button className="btn-logout" onClick={logoutLocal}>
           Salir
         </button>
       </div>

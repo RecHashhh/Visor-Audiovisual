@@ -50,7 +50,7 @@ export default function UploadPage() {
         {manageableMedia.length > 0 && (
           <button className={`up-dest-btn ${destination === 'biblioteca' ? 'active' : ''}`} onClick={() => setDestination('biblioteca')}>
             <strong>Biblioteca</strong>
-            <span>Marcas, documentos, plantillas y demás — carpeta libre con nombres originales.</span>
+            <span>Marcas, documentos, plantillas y demás: carpeta libre con nombres originales.</span>
           </button>
         )}
       </div>
@@ -288,7 +288,7 @@ function LocalSource({ projectCode, projectName, prefijo, keepNames, setKeepName
         <input type="checkbox" checked={keepNames} onChange={e => { setKeepNames(e.target.checked); setRows([]) }} />
         Mantener nombres y carpetas originales (sin prefijo ni fechas)
       </label>
-      <p className="up-hint">Van directo de tu equipo al almacenamiento en bloques de 32 MB con reintentos — los videos de varias GB no dependen del timeout del servidor. No cierres la pestaña hasta que termine.</p>
+      <p className="up-hint">Van directo de tu equipo al almacenamiento en bloques de 32 MB con reintentos: los videos de varias GB no dependen del timeout del servidor. No cierres la pestaña hasta que termine.</p>
 
       <div className="up-pickers">
         <button type="button" className="up-btn-ghost" onClick={analyze} disabled={busy || !files.length}>{busy && !rows.length ? 'Analizando…' : 'Analizar archivos'}</button>

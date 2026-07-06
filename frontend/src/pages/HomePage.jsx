@@ -81,7 +81,7 @@ export default function HomePage() {
         <h1 className="home-hero-title">El hub de contenido audiovisual y de marca</h1>
         <p className="home-hero-text">
           Fotos de dron, video de obra, logos, plantillas y todo lo demás que produce la
-          empresa — organizado para encontrarlo en segundos.
+          empresa, organizado para encontrarlo en segundos.
         </p>
         <div className="home-hero-actions">
           {showMaterial && <Link to="/proyectos" className="home-hero-btn">Buscar material</Link>}
@@ -119,15 +119,15 @@ export default function HomePage() {
             <p className="home-card-desc">{material.description}</p>
             <div className="stats-bar home-featured-stats">
               <div className="stat-box">
-                <div className="stat-num">{loading ? '—' : counts.total}</div>
+                <div className="stat-num">{loading ? '…' : counts.total}</div>
                 <div className="stat-lbl">Proyectos</div>
               </div>
               <div className="stat-box">
-                <div className="stat-num" style={{ color: 'var(--green)' }}>{loading ? '—' : counts.done}</div>
+                <div className="stat-num" style={{ color: 'var(--green)' }}>{loading ? '…' : counts.done}</div>
                 <div className="stat-lbl">Completos</div>
               </div>
               <div className="stat-box">
-                <div className="stat-num" style={{ color: 'var(--red)' }}>{loading ? '—' : counts.pending}</div>
+                <div className="stat-num" style={{ color: 'var(--red)' }}>{loading ? '…' : counts.pending}</div>
                 <div className="stat-lbl">Pendientes</div>
               </div>
             </div>
