@@ -1522,6 +1522,7 @@ def debug_auth(req: func.HttpRequest) -> func.HttpResponse:
     x_access_token = req.headers.get("X-Access-Token", "")
     x_client_principal = req.headers.get("x-ms-client-principal", "") or req.headers.get("X-MS-CLIENT-PRINCIPAL", "")
     x_client_principal_id = req.headers.get("x-ms-client-principal-id", "") or req.headers.get("X-MS-CLIENT-PRINCIPAL-ID", "")
+    x_ms_headers = {k: v for k, v in req.headers.items() if k.lower().startswith("x-ms-")}
     caller = get_caller(req)
 
     token = auth or x_access_token
@@ -1542,6 +1543,7 @@ def debug_auth(req: func.HttpRequest) -> func.HttpResponse:
         "xAccessTokenPresent": bool(x_access_token),
         "xClientPrincipalPresent": bool(x_client_principal),
         "xClientPrincipalIdPresent": bool(x_client_principal_id),
+        "xMsHeaders": x_ms_headers,
         "tokenKind": token_kind,
         "caller": caller,
         "claims": {
