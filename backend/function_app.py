@@ -18,6 +18,7 @@ from typing import Optional, Dict, Any
 from PIL import Image, ImageOps
 
 import requests
+import base64
 from azure.storage.blob import (
     BlobServiceClient,
     generate_blob_sas,
@@ -598,9 +599,80 @@ def _decode_claims_unverified(token: str) -> dict:
         "verify_exp": False, "verify_nbf": False, "verify_iat": False,
     })
 
+def _decode_client_principal(req: func.HttpRequest) -> Optional[dict]:
+    raw = req.headers.get("x-ms-client-principal", "") or req.headers.get("X-MS-CLIENT-PRINCIPAL", "")
+    if not raw:
+        return None
+    try:
+        padded = raw + ("=" * (-len(raw) % 4))
+        decoded = base64.b64decode(padded).decode("utf-8")
+        return json.loads(decoded)
+    except Exception as exc:
+        logging.warning("_decode_client_principal: %s", exc)
+        return None
+
+def _caller_from_client_principal(req: func.HttpRequest) -> Optional[Dict[str, str]]:
+    principal = _decode_client_principal(req)
+    if not principal:
+        return None
+
+    claims = principal.get("claims") if isinstance(principal, dict) else None
+    if not isinstance(claims, list):
+        claims = []
+
+    claim_map: Dict[str, list] = {}
+    for claim in claims:
+        if not isinstance(claim, dict):
+            continue
+        key = str(claim.get("typ") or claim.get("type") or "").strip()
+        value = str(claim.get("val") or claim.get("value") or "").strip()
+        if key:
+            claim_map.setdefault(key, []).append(value)
+
+    def _first(*keys: str) -> str:
+        for key in keys:
+            values = claim_map.get(key)
+            if values:
+                for value in values:
+                    if value:
+                        return value
+        return ""
+
+    email = _first(
+        "preferred_username",
+        "email",
+        "emails",
+        "upn",
+        "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier",
+        "name",
+    ).strip().lower()
+
+    if email and email.startswith("[") and email.endswith("]"):
+        try:
+            parsed = json.loads(email)
+            if isinstance(parsed, list) and parsed:
+                email = str(parsed[0]).strip().lower()
+        except Exception:
+            pass
+
+    if not email:
+        user_details = str(principal.get("userDetails") or "").strip().lower()
+        if user_details:
+            email = user_details
+
+    if not email:
+        return None
+
+    name = str(principal.get("userDetails") or _first("name") or "").strip()
+    return {"email": email, "name": name}
+
 def get_caller(req: func.HttpRequest) -> Optional[Dict[str, str]]:
     """Extrae la identidad (email + nombre) del token Bearer. None si el token
     falta o no trae identidad de este tenant."""
+    client_principal_caller = _caller_from_client_principal(req)
+    if client_principal_caller is not None:
+        return client_principal_caller
+
     auth = req.headers.get("Authorization", "") or req.headers.get("X-Access-Token", "")
     if auth and not auth.startswith("Bearer ") and auth.count(".") == 2:
         auth = f"Bearer {auth}"
@@ -1448,6 +1520,8 @@ def debug_auth(req: func.HttpRequest) -> func.HttpResponse:
 
     auth = req.headers.get("Authorization", "")
     x_access_token = req.headers.get("X-Access-Token", "")
+    x_client_principal = req.headers.get("x-ms-client-principal", "") or req.headers.get("X-MS-CLIENT-PRINCIPAL", "")
+    x_client_principal_id = req.headers.get("x-ms-client-principal-id", "") or req.headers.get("X-MS-CLIENT-PRINCIPAL-ID", "")
     caller = get_caller(req)
 
     token = auth or x_access_token
@@ -1466,6 +1540,8 @@ def debug_auth(req: func.HttpRequest) -> func.HttpResponse:
     return ok({
         "authHeaderPresent": bool(auth),
         "xAccessTokenPresent": bool(x_access_token),
+        "xClientPrincipalPresent": bool(x_client_principal),
+        "xClientPrincipalIdPresent": bool(x_client_principal_id),
         "tokenKind": token_kind,
         "caller": caller,
         "claims": {
