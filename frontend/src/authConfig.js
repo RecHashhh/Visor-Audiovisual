@@ -12,17 +12,10 @@ if (!TENANT_ID || !CLIENT_ID) {
   console.error('[authConfig] TENANT_ID o CLIENT_ID no están definidos. Revisar secrets de GitHub.')
 }
 
-// Multi-tenant: "/organizations" permite iniciar sesión con cuentas de
-// cualquier organización Microsoft (no personales). Qué organizaciones se
-// admiten de verdad lo controla el backend (AAD_TENANT_IDS). Para volver a un
-// solo tenant, define VITE_AUTHORITY o cfg.authority con el tenant ID.
-const AUTHORITY = cfg.authority || import.meta.env.VITE_AUTHORITY
-  || `https://login.microsoftonline.com/organizations`
-
 export const msalConfig = {
   auth: {
     clientId:              CLIENT_ID,
-    authority:             AUTHORITY,
+    authority:             `https://login.microsoftonline.com/${TENANT_ID}`,
     redirectUri:           window.location.origin,
     postLogoutRedirectUri: window.location.origin,
     navigateToLoginRequestUrl: false,  // No redirigir a la URL original después del login
