@@ -46,14 +46,15 @@ export function hasCap(me, cap) {
 
 export function canSection(me, sectionId) {
   if (!me || me.allowed === false) return false
-  if (me.isManager || me.sections === '*') return true
+  // La visibilidad la gobiernan sections/scopes aunque el usuario pueda subir
+  // (isManager): así un operador/personalizado se puede limitar por sección.
+  if (me.sections === '*') return true
   return Array.isArray(me.sections) && me.sections.includes(sectionId)
 }
 
 // ¿Puede ver un ítem concreto (proyecto, carpeta de marca…) dentro de una sección?
 export function canItem(me, sectionId, itemId) {
   if (!canSection(me, sectionId)) return false
-  if (me.isManager) return true
   const scope = me.scopes && me.scopes[sectionId]
   if (!scope || !Array.isArray(scope) || scope.length === 0) return true
   return scope.includes(itemId)

@@ -838,17 +838,16 @@ def effective_perms(caller: Optional[Dict[str, str]]) -> dict:
     return _perms(email, name, "viewer", dict(ROLE_CAPS["viewer"]),
                   list(DEFAULT_GUEST_SECTIONS), {}, False, False)
 
+# La visibilidad la gobiernan SIEMPRE `sections`/`scopes`, sin importar si el
+# usuario puede subir/gestionar (isManager). Solo el admin con manageAccess ve
+# todo, porque effective_perms le fija sections="*" explícitamente.
 def perms_allow_section(perms: dict, section: str) -> bool:
-    if perms.get("isManager"):
-        return True
     secs = perms.get("sections")
     return secs == "*" or (isinstance(secs, list) and section in secs)
 
 def perms_allow_item(perms: dict, section: str, item: str) -> bool:
     if not perms_allow_section(perms, section):
         return False
-    if perms.get("isManager"):
-        return True
     scope = (perms.get("scopes") or {}).get(section)
     if not scope:            # ausente o vacío = acceso a toda la sección
         return True
@@ -885,8 +884,6 @@ def require_blob_access(req: func.HttpRequest, blob_path: str):
     return require_perms(req, section="proyectos", item=seg[0] if seg else "")
 
 def _filter_projects_by_perms(items: list, perms: dict) -> list:
-    if perms.get("isManager"):
-        return items
     if not perms_allow_section(perms, "proyectos"):
         return []
     scope = (perms.get("scopes") or {}).get("proyectos")
@@ -896,8 +893,8 @@ def _filter_projects_by_perms(items: list, perms: dict) -> list:
     return [p for p in items if p.get("code") in allowed]
 
 def _filter_media_folders_by_perms(folders: list, perms: dict, section: str) -> list:
-    if perms.get("isManager"):
-        return folders
+    if not perms_allow_section(perms, section):
+        return []
     scope = (perms.get("scopes") or {}).get(section)
     if not scope:
         return folders
