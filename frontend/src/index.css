@@ -1923,8 +1923,26 @@ code { font-family: var(--font-mono); background: var(--bg3); padding: 2px 6px; 
 .access-allsections input { width: 16px; height: 16px; cursor: pointer; }
 .access-view-list { display: flex; flex-direction: column; gap: 8px; }
 .access-view-row { display: flex; flex-direction: column; gap: 6px; }
-.access-scope { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; padding-left: 14px; }
+.access-scope { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; padding: 4px 12px 12px 42px; }
+.access-scope.blocked { opacity: 0.85; }
 .access-scope-label { font-size: 0.74rem; color: var(--text-dim); margin-right: 2px; }
+.access-scope-empty { font-size: 0.8rem; color: var(--text-faint); }
+
+/* Acordeón de usuario */
+.access-user-head { cursor: pointer; user-select: none; }
+.chevron { color: var(--text-dim); transition: transform 0.15s ease; flex: none; }
+.chevron.open { transform: rotate(90deg); }
+.access-user-sum { font-size: 0.82rem; color: var(--text-dim); }
+
+/* Acordeón de secciones (Qué puede ver) */
+.access-seclist { display: flex; flex-direction: column; gap: 6px; }
+.access-sec { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg); overflow: hidden; }
+.access-sec.active { border-color: var(--accent-bd); background: var(--accent-bg); }
+.access-sec-head { display: flex; align-items: center; gap: 10px; padding: 9px 12px; }
+.access-sec-check { width: 17px; height: 17px; flex: none; cursor: pointer; accent-color: var(--accent); }
+.access-sec-name { flex: 1; display: flex; align-items: center; justify-content: space-between; gap: 10px; background: none; border: 0; padding: 0; cursor: pointer; font: inherit; color: var(--text); text-align: left; }
+.access-sec-title { font-size: 0.9rem; font-weight: 600; }
+.access-sec-meta { display: inline-flex; align-items: center; gap: 6px; font-size: 0.76rem; color: var(--text-dim); }
 .chip-mini {
   font-size: 0.72rem; padding: 3px 9px; border-radius: 99px; border: 1px solid var(--border);
   background: var(--bg); color: var(--text-dim); cursor: pointer; transition: var(--transition); font-family: var(--font-mono);

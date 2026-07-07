@@ -239,8 +239,20 @@ export default function AccessPage() {
   )
 }
 
+function Chevron({ open, small }) {
+  const sz = small ? 14 : 16
+  return (
+    <svg className={`chevron ${open ? 'open' : ''}`} width={sz} height={sz} viewBox="0 0 24 24"
+      fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M9 6l6 6-6 6" />
+    </svg>
+  )
+}
+
 function UserRow({ user: u, isSelf, sectionItems, onPatch, onSetRole, onToggleCap, onRemove }) {
   const canManageAll = u.caps.manageAccess
+  const [open, setOpen] = useState(false)
+  const [openSecs, setOpenSecs] = useState(() => new Set())
 
   function toggleSection(sectionId) {
     const current = Array.isArray(u.sections) ? u.sections : []
@@ -253,16 +265,29 @@ function UserRow({ user: u, isSelf, sectionItems, onPatch, onSetRole, onToggleCa
     else scopes[sectionId] = itemIds
     onPatch({ scopes })
   }
+  function toggleSec(id) {
+    setOpenSecs(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n })
+  }
+
+  const summary = canManageAll || u.sections === '*'
+    ? 'Todas las secciones'
+    : (Array.isArray(u.sections) && u.sections.length
+        ? `${u.sections.length} sección${u.sections.length !== 1 ? 'es' : ''}`
+        : 'Sin secciones')
 
   return (
-    <div className={`access-user ${u.enabled ? '' : 'is-disabled'}`}>
-      <div className="access-user-head">
+    <div className={`access-user ${u.enabled ? '' : 'is-disabled'} ${open ? 'is-open' : ''}`}>
+      <div className="access-user-head" role="button" tabIndex={0}
+        onClick={() => setOpen(o => !o)}
+        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(o => !o) } }}>
         <div className="access-user-id">
+          <Chevron open={open} />
           <span className="access-user-email">{u.email}</span>
           {isSelf && <span className="badge badge-accent">Tú</span>}
           <span className="access-user-role">{roleLabelFor(u)}</span>
+          {!open && <span className="access-user-sum">· {summary}</span>}
         </div>
-        <div className="access-user-controls">
+        <div className="access-user-controls" onClick={e => e.stopPropagation()}>
           <label className="switch switch-sm" title={u.enabled ? 'Acceso activo' : 'Acceso pausado'}>
             <input type="checkbox" checked={u.enabled} onChange={e => onPatch({ enabled: e.target.checked })} />
             <span className="switch-slider" aria-hidden="true" />
@@ -275,84 +300,105 @@ function UserRow({ user: u, isSelf, sectionItems, onPatch, onSetRole, onToggleCa
         </div>
       </div>
 
-      <div className="access-user-body">
-        <div className="access-field">
-          <span className="access-field-label">Rol (punto de partida)</span>
-          <div className="segmented">
-            {['admin', 'operador', 'viewer'].map(r => (
-              <button key={r} className={`segmented-btn ${capsMatch(u.caps, r) && ((r !== 'viewer') === (u.sections === '*')) ? 'active' : ''}`}
-                onClick={() => onSetRole(r)}>{ROLE_LABEL[r]}</button>
-            ))}
-          </div>
-        </div>
-
-        <div className="access-field">
-          <span className="access-field-label">Qué puede hacer</span>
-          <div className="access-caps">
-            {CAP_META.map(c => (
-              <label key={c.key} className="access-cap">
-                <input type="checkbox" checked={Boolean(u.caps[c.key])} onChange={() => onToggleCap(c.key)} />
-                <span>{c.label}</span>
-              </label>
-            ))}
-          </div>
-        </div>
-
-        <div className="access-field">
-          <span className="access-field-label">Qué puede ver</span>
-          {canManageAll ? (
-            <p className="access-hint">Con “gestionar accesos” activo, ve todas las secciones y todo su contenido.</p>
-          ) : (
-            <div className="access-view">
-              <label className="access-allsections">
-                <input type="checkbox" checked={u.sections === '*'}
-                  onChange={e => onPatch({ sections: e.target.checked ? '*' : [] })} />
-                <span>Ver <strong>todas</strong> las secciones</span>
-              </label>
-
-              {u.sections === '*' ? (
-                <p className="access-hint">Esta persona ve todas las secciones. Desmarca la casilla para elegir solo algunas.</p>
-              ) : (
-                <>
-                  <p className="access-hint">Marca las secciones que <strong>sí</strong> puede ver (las demás quedan ocultas):</p>
-                  <div className="access-view-list">
-                    {SECTIONS.map(s => {
-                      const active = Array.isArray(u.sections) && u.sections.includes(s.id)
-                      const scope = u.scopes[s.id]
-                      const items = sectionItems[s.id] || []
-                      return (
-                        <div key={s.id} className="access-view-row">
-                          <button className={`filter-chip ${active ? 'active' : ''}`} onClick={() => toggleSection(s.id)}>
-                            {active ? '✓ ' : ''}{s.label}
-                          </button>
-                          {active && items.length > 0 && (
-                            <div className="access-scope">
-                              <span className="access-scope-label">Solo:</span>
-                              <button className={`chip-mini ${!scope ? 'active' : ''}`} onClick={() => setScope(s.id, [])}>Todo</button>
-                              {items.map(it => {
-                                const on = Array.isArray(scope) && scope.includes(it.id)
-                                return (
-                                  <button key={it.id} className={`chip-mini ${on ? 'active' : ''}`} title={it.label}
-                                    onClick={() => {
-                                      const cur = Array.isArray(scope) ? scope : []
-                                      setScope(s.id, on ? cur.filter(x => x !== it.id) : [...cur, it.id])
-                                    }}>
-                                    {it.id}
-                                  </button>
-                                )
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
-                </>
-              )}
+      {open && (
+        <div className="access-user-body">
+          <div className="access-field">
+            <span className="access-field-label">Rol (punto de partida)</span>
+            <div className="segmented">
+              {['admin', 'operador', 'viewer'].map(r => (
+                <button key={r} className={`segmented-btn ${capsMatch(u.caps, r) && ((r !== 'viewer') === (u.sections === '*')) ? 'active' : ''}`}
+                  onClick={() => onSetRole(r)}>{ROLE_LABEL[r]}</button>
+              ))}
             </div>
-          )}
+          </div>
+
+          <div className="access-field">
+            <span className="access-field-label">Qué puede hacer</span>
+            <div className="access-caps">
+              {CAP_META.map(c => (
+                <label key={c.key} className="access-cap">
+                  <input type="checkbox" checked={Boolean(u.caps[c.key])} onChange={() => onToggleCap(c.key)} />
+                  <span>{c.label}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div className="access-field">
+            <span className="access-field-label">Qué puede ver</span>
+            {canManageAll ? (
+              <p className="access-hint">Con “gestionar accesos” activo, ve todas las secciones y todo su contenido.</p>
+            ) : (
+              <div className="access-view">
+                <label className="access-allsections">
+                  <input type="checkbox" checked={u.sections === '*'}
+                    onChange={e => onPatch({ sections: e.target.checked ? '*' : [] })} />
+                  <span>Ver <strong>todas</strong> las secciones</span>
+                </label>
+
+                {u.sections === '*' ? (
+                  <p className="access-hint">Esta persona ve todas las secciones. Desmarca la casilla para elegir solo algunas.</p>
+                ) : (
+                  <>
+                    <p className="access-hint">
+                      Marca la casilla de cada sección que <strong>sí</strong> puede ver. Haz clic en el nombre para elegir carpetas concretas.
+                    </p>
+                    <div className="access-seclist">
+                      {SECTIONS.map(s => {
+                        const active = Array.isArray(u.sections) && u.sections.includes(s.id)
+                        const scope = u.scopes[s.id]
+                        const items = sectionItems[s.id] || []
+                        const isOpen = openSecs.has(s.id)
+                        return (
+                          <div key={s.id} className={`access-sec ${active ? 'active' : ''}`}>
+                            <div className="access-sec-head">
+                              <input type="checkbox" className="access-sec-check" checked={active}
+                                onChange={() => toggleSection(s.id)} aria-label={`Dar acceso a ${s.label}`} />
+                              <button type="button" className="access-sec-name" onClick={() => toggleSec(s.id)}>
+                                <span className="access-sec-title">{s.label}</span>
+                                <span className="access-sec-meta">
+                                  <span>{active ? (scope ? `${scope.length} carpeta${scope.length !== 1 ? 's' : ''}` : 'Todo') : 'Sin acceso'}</span>
+                                  <Chevron open={isOpen} small />
+                                </span>
+                              </button>
+                            </div>
+                            {isOpen && (
+                              <div className={`access-scope ${active ? '' : 'blocked'}`}>
+                                {items.length === 0 ? (
+                                  <span className="access-scope-empty">Aún no hay carpetas en esta sección.</span>
+                                ) : !active ? (
+                                  <span className="access-scope-empty">Marca la casilla de la izquierda para dar acceso y elegir carpetas.</span>
+                                ) : (
+                                  <>
+                                    <span className="access-scope-label">Solo:</span>
+                                    <button className={`chip-mini ${!scope ? 'active' : ''}`} onClick={() => setScope(s.id, [])}>Todo</button>
+                                    {items.map(it => {
+                                      const on = Array.isArray(scope) && scope.includes(it.id)
+                                      return (
+                                        <button key={it.id} className={`chip-mini ${on ? 'active' : ''}`} title={it.label}
+                                          onClick={() => {
+                                            const cur = Array.isArray(scope) ? scope : []
+                                            setScope(s.id, on ? cur.filter(x => x !== it.id) : [...cur, it.id])
+                                          }}>
+                                          {it.id}
+                                        </button>
+                                      )
+                                    })}
+                                  </>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   )
 }
