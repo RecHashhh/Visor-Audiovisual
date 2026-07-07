@@ -55,6 +55,14 @@ MEDIA_PREFIX = os.environ.get("MEDIA_PREFIX", "_media")
 #            Application Settings (AUTH_MODE=strict) al mismo tiempo que el modo Restringido.
 AAD_TENANT_ID = os.environ.get("AAD_TENANT_ID", "12f2a4b5-4935-464d-9dae-e0525d0c593f")
 AAD_CLIENT_ID = os.environ.get("AAD_CLIENT_ID", "a4413b75-4069-48e0-b055-55dce319dfbc")
+# Tenants admitidos (multi-tenant controlado). Por defecto SOLO el principal.
+# Para dejar entrar otra organización (p. ej. ripconciv.pe), agrega su Tenant ID
+# a AAD_TENANT_IDS en Application Settings, separados por coma:
+#   AAD_TENANT_IDS=12f2a4b5-...,<tenant-id-de-ripconciv.pe>
+# Usa "*" para admitir CUALQUIER organización Microsoft (no recomendado con el
+# modo Abierto: expondría la sección Marcas a cualquier cuenta corporativa).
+AAD_TENANT_IDS = {t.strip().lower() for t in os.environ.get("AAD_TENANT_IDS", AAD_TENANT_ID).split(",") if t.strip()}
+AAD_ANY_TENANT = "*" in AAD_TENANT_IDS
 AUTH_MODE = os.environ.get("AUTH_MODE", "lax").strip().lower()
 # Súper-administradores permanentes (coma-separados). Siempre admins, aunque la
 # config de accesos diga otra cosa — es la vía de recuperación ante un bloqueo.
@@ -706,11 +714,12 @@ def get_caller(req: func.HttpRequest) -> Optional[Dict[str, str]]:
         else:
             claims = _decode_claims_unverified(token)
 
-        tid = str(claims.get("tid") or "")
-        iss = str(claims.get("iss") or "")
-        if AAD_TENANT_ID and AAD_TENANT_ID != tid and AAD_TENANT_ID not in iss:
-            logging.warning("get_caller: tenant no coincide (tid=%s)", tid)
-            return None
+        tid = str(claims.get("tid") or "").lower()
+        iss = str(claims.get("iss") or "").lower()
+        if not AAD_ANY_TENANT:
+            if tid not in AAD_TENANT_IDS and not any(t in iss for t in AAD_TENANT_IDS):
+                logging.warning("get_caller: tenant no admitido (tid=%s)", tid)
+                return None
         email = (
             claims.get("preferred_username") or claims.get("upn")
             or claims.get("email") or claims.get("unique_name") or ""
