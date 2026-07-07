@@ -10,6 +10,8 @@ import { api } from '../utils/api'
 import { fetchThumb } from '../utils/thumbs'
 import { useAuthz, hasCap } from '../utils/authz'
 import { sectionById } from '../config/sections'
+import Modal from '../components/Modal'
+import { uploadFileToBlob } from '../utils/blobUpload'
 
 const FORMAT_LABEL = {
   centrada: 'Centrada', horizontal: 'Horizontal', simbolo: 'Símbolo',
@@ -101,9 +103,7 @@ export default function MediaFolderPage({ sectionId }) {
   const [format, setFormat] = useState('all')
   const [background, setBackground] = useState('all')
   const [color, setColor] = useState('all')
-  const [uploading, setUploading] = useState(false)
-  const [uploadMsg, setUploadMsg] = useState(null)
-  const fileInputRef = useRef(null)
+  const [uploadOpen, setUploadOpen] = useState(false)
 
   function load() {
     setLoading(true); setError(null)
@@ -151,29 +151,6 @@ export default function MediaFolderPage({ sectionId }) {
     (background === 'all' || v.background === background) &&
     (color === 'all' || v.color === color))
 
-  async function onUploadFiles(e) {
-    const chosen = e.target.files
-    if (!chosen || chosen.length === 0) return
-    setUploading(true); setUploadMsg(null)
-    try {
-      const res = await api.uploadMediaFiles(sectionId, folder, chosen)
-      const okCount = res?.uploaded?.length || 0
-      const failCount = res?.failed?.length || 0
-      setUploadMsg({
-        ok: failCount === 0,
-        text: failCount === 0
-          ? `${okCount} archivo${okCount !== 1 ? 's' : ''} subido${okCount !== 1 ? 's' : ''}.`
-          : `${okCount} subidos, ${failCount} con error (${res.failed.map(f => f.name).join(', ')}).`,
-      })
-      load()
-    } catch (err2) {
-      setUploadMsg({ ok: false, text: `No se pudo subir: ${err2.message}` })
-    } finally {
-      setUploading(false)
-      if (fileInputRef.current) fileInputRef.current.value = ''
-    }
-  }
-
   const Crumb = () => (
     <div className="breadcrumb">
       <Link to={section.path}>{section.label}</Link>
@@ -194,13 +171,7 @@ export default function MediaFolderPage({ sectionId }) {
           <p className="page-sub">{meta?.tagline || `${files.length} archivo${files.length !== 1 ? 's' : ''}`}</p>
         </div>
         {canUpload && (
-          <div className="brand-upload">
-            <input ref={fileInputRef} type="file" multiple hidden onChange={onUploadFiles} />
-            <button className="btn btn-primary" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
-              {uploading ? 'Subiendo...' : 'Subir archivos'}
-            </button>
-            {uploadMsg && <span className={`media-add-msg ${uploadMsg.ok ? 'ok' : 'error'}`}>{uploadMsg.text}</span>}
-          </div>
+          <button className="btn btn-primary" onClick={() => setUploadOpen(true)}>Subir archivos</button>
         )}
       </div>
 
@@ -299,7 +270,116 @@ export default function MediaFolderPage({ sectionId }) {
       {viewer >= 0 && imageFiles[viewer] && (
         <Lightbox images={imageFiles} index={viewer} onClose={() => setViewer(-1)} onMove={moveViewer} />
       )}
+
+      {canUpload && (
+        <UploadModal open={uploadOpen} onClose={() => setUploadOpen(false)}
+          sectionId={sectionId} folder={folder} onDone={load} />
+      )}
     </>
+  )
+}
+
+// ── Modal de subida: arrastrar/soltar + subida directa navegador→blob ─────────
+function UploadModal({ open, onClose, sectionId, folder, onDone }) {
+  const [items, setItems] = useState([])
+  const [busy, setBusy] = useState(false)
+  const [drag, setDrag] = useState(false)
+  const inputRef = useRef(null)
+
+  useEffect(() => { if (open) { setItems([]); setBusy(false); setDrag(false) } }, [open])
+
+  function addFiles(fileList) {
+    const arr = Array.from(fileList || [])
+    if (!arr.length) return
+    setItems(prev => [...prev, ...arr.map(f => ({ file: f, name: f.name, size: f.size, pct: 0, status: 'pending', error: null }))])
+  }
+  function removeAt(i) { setItems(prev => prev.filter((_, idx) => idx !== i)) }
+  function update(i, patch) { setItems(prev => prev.map((it, idx) => idx === i ? { ...it, ...patch } : it)) }
+
+  async function start() {
+    const idxs = items.map((_, i) => i).filter(i => items[i].status !== 'done')
+    if (!idxs.length) return
+    setBusy(true)
+    try {
+      const payload = idxs.map(i => ({ name: items[i].name, size: items[i].size }))
+      const plan = await api.postMediaUploadPlan(sectionId, folder, payload)
+      const planned = plan.files || []
+      let anyOk = false
+      for (let k = 0; k < idxs.length; k++) {
+        const i = idxs[k]
+        const p = planned[k]
+        if (!p || p.status === 'omitido' || !p.sasUrl) {
+          update(i, { status: 'error', error: p?.reason || 'No se pudo preparar' })
+          continue
+        }
+        update(i, { status: 'up', pct: 0 })
+        try {
+          await uploadFileToBlob(p.sasUrl, items[i].file, p.contentType, loaded => {
+            update(i, { pct: Math.min(100, Math.round((loaded / (items[i].size || 1)) * 100)) })
+          })
+          update(i, { status: 'done', pct: 100 })
+          anyOk = true
+        } catch (e) {
+          update(i, { status: 'error', error: e.message })
+        }
+      }
+      if (anyOk) onDone?.()
+    } catch (e) {
+      idxs.forEach(i => update(i, { status: 'error', error: e.message }))
+    } finally { setBusy(false) }
+  }
+
+  const pending = items.filter(it => it.status !== 'done').length
+  const allDone = items.length > 0 && pending === 0
+
+  return (
+    <Modal open={open} onClose={() => !busy && onClose()} wide
+      title="Subir archivos" subtitle={`A la carpeta “${folder}”`}
+      footer={<>
+        <button className="btn btn-ghost" onClick={onClose} disabled={busy}>{allDone ? 'Cerrar' : 'Cancelar'}</button>
+        <button className="btn btn-primary" onClick={start} disabled={busy || pending === 0}>
+          {busy ? 'Subiendo...' : `Subir ${pending || ''}`.trim()}
+        </button>
+      </>}
+    >
+      <input ref={inputRef} type="file" multiple hidden onChange={e => { addFiles(e.target.files); if (inputRef.current) inputRef.current.value = '' }} />
+      <div
+        className={`dropzone ${drag ? 'drag' : ''}`}
+        onClick={() => inputRef.current?.click()}
+        onDragOver={e => { e.preventDefault(); setDrag(true) }}
+        onDragLeave={e => { e.preventDefault(); setDrag(false) }}
+        onDrop={e => { e.preventDefault(); setDrag(false); addFiles(e.dataTransfer.files) }}
+      >
+        <div className="dropzone-icon">
+          <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 16V4M8 8l4-4 4 4" /><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
+          </svg>
+        </div>
+        <div className="dropzone-text">Arrastra tus archivos aquí</div>
+        <div className="dropzone-sub">o haz clic para seleccionarlos · imágenes, video, PDF, .ai, fuentes…</div>
+      </div>
+
+      {items.length > 0 && (
+        <div className="upload-list">
+          {items.map((it, i) => (
+            <div key={i} className={`upload-item ${it.status}`}>
+              <div className="upload-item-top">
+                <span className="upload-item-name" title={it.name}>{it.name}</span>
+                <span className="upload-item-size">
+                  {it.status === 'error' ? (it.error || 'Error') : it.status === 'done' ? 'Listo' : fmtSize(it.size)}
+                </span>
+                {!busy && it.status !== 'done' && (
+                  <button className="upload-item-x" onClick={() => removeAt(i)} aria-label={`Quitar ${it.name}`}>×</button>
+                )}
+              </div>
+              {(it.status === 'up' || it.status === 'done') && (
+                <div className="upload-bar"><div className="upload-bar-fill" style={{ width: `${it.pct}%` }} /></div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </Modal>
   )
 }
 

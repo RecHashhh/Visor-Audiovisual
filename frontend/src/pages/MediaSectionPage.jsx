@@ -2,11 +2,12 @@
 // Explorador genérico de una sección de biblioteca (_media/<section>/): lista sus
 // carpetas y permite crear nuevas (a quien tenga la capacidad manageMedia).
 // Sirve para Marcas, Documentos, Videos, Eventos y Redes.
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../utils/api'
 import { useAuthz, hasCap, canItem } from '../utils/authz'
 import { sectionById } from '../config/sections'
+import Modal from '../components/Modal'
 
 function timeAgo(iso) {
   if (!iso) return null
@@ -20,26 +21,28 @@ function timeAgo(iso) {
   return `Hace ${months} mes${months > 1 ? 'es' : ''}`
 }
 
-const NEW_LABEL = {
-  marcas: 'Nueva marca', documentos: 'Nueva carpeta', videos: 'Nueva carpeta',
-  eventos: 'Nuevo evento', redes: 'Nueva carpeta',
+// Qué pide el modal de "crear" según la sección.
+const NEW_FIELDS = {
+  marcas:     { btn: 'Nueva marca',   title: 'Nueva marca',   label: 'Nombre de la marca',   placeholder: 'p. ej. GEOFORCE',                 help: 'Se crea una carpeta para los logos y el material de esta marca.' },
+  eventos:    { btn: 'Nuevo evento',  title: 'Nuevo evento',  label: 'Nombre del evento',    placeholder: 'p. ej. Inauguración Puente 2026', help: 'Agrupa las fotos y videos de un evento.' },
+  documentos: { btn: 'Nueva carpeta', title: 'Nueva carpeta', label: 'Nombre de la carpeta', placeholder: 'p. ej. Plantillas de correo',     help: 'Agrupa documentos o plantillas.' },
+  videos:     { btn: 'Nueva carpeta', title: 'Nueva carpeta', label: 'Nombre de la carpeta', placeholder: 'p. ej. Institucional 2026',       help: 'Agrupa videos por tema o campaña.' },
+  redes:      { btn: 'Nueva carpeta', title: 'Nueva carpeta', label: 'Nombre de la carpeta', placeholder: 'p. ej. Campaña julio',            help: 'Agrupa piezas para redes sociales.' },
 }
-const NEW_PLACEHOLDER = {
-  marcas: 'Nombre de la marca, p. ej. GEOFORCE',
-  eventos: 'Nombre del evento, p. ej. Inauguración Puente 2026',
-  default: 'Nombre de la carpeta',
-}
+const DEFAULT_FIELDS = { btn: 'Nueva carpeta', title: 'Nueva carpeta', label: 'Nombre de la carpeta', placeholder: 'Nombre de la carpeta', help: '' }
 
 export default function MediaSectionPage({ sectionId }) {
   const section = sectionById(sectionId)
+  const cfg = NEW_FIELDS[sectionId] || DEFAULT_FIELDS
   const { me } = useAuthz()
   const canCreate = hasCap(me, 'manageMedia')
   const [folders, setFolders] = useState(null)
   const [error, setError] = useState(null)
+  const [modalOpen, setModalOpen] = useState(false)
   const [newName, setNewName] = useState('')
   const [creating, setCreating] = useState(false)
+  const [err, setErr] = useState(null)
   const [msg, setMsg] = useState(null)
-  const inputRef = useRef(null)
 
   function load() {
     setError(null)
@@ -49,23 +52,19 @@ export default function MediaSectionPage({ sectionId }) {
   }
   useEffect(() => { setFolders(null); load() }, [sectionId]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  function openModal() { setNewName(''); setErr(null); setModalOpen(true) }
+
   async function create() {
     const name = newName.trim()
-    if (!name) {
-      // Antes el botón quedaba deshabilitado y el clic "no hacía nada"; ahora
-      // guiamos al usuario al campo en vez de fallar en silencio.
-      setMsg({ ok: false, text: 'Escribe primero el nombre en el campo de la izquierda.' })
-      inputRef.current?.focus()
-      return
-    }
-    setCreating(true); setMsg(null)
+    if (!name) { setErr('Escribe un nombre.'); return }
+    setCreating(true); setErr(null)
     try {
       await api.createMediaFolder(sectionId, name)
-      setNewName('')
-      setMsg({ ok: true, text: `“${name}” creada. Ya puedes entrar y subir su contenido.` })
+      setModalOpen(false)
+      setMsg({ ok: true, text: `“${name}” creada. Entra en ella para subir su contenido.` })
       load()
     } catch (e) {
-      setMsg({ ok: false, text: `No se pudo crear: ${e.message}` })
+      setErr(`No se pudo crear: ${e.message}`)
     } finally { setCreating(false) }
   }
 
@@ -73,29 +72,17 @@ export default function MediaSectionPage({ sectionId }) {
 
   return (
     <>
-      <div className="page-header">
-        <h1 className="page-title">{section?.label || 'Biblioteca'}</h1>
-        <p className="page-sub">{section?.description}</p>
+      <div className="page-header brand-page-header">
+        <div>
+          <h1 className="page-title">{section?.label || 'Biblioteca'}</h1>
+          <p className="page-sub">{section?.description}</p>
+        </div>
+        {canCreate && (
+          <button className="btn btn-primary" onClick={openModal}>{cfg.btn}</button>
+        )}
       </div>
 
-      {canCreate && (
-        <div className="media-add">
-          <div className="media-add-row">
-            <input ref={inputRef} className="search-input"
-              aria-label={NEW_LABEL[sectionId] || 'Nueva carpeta'}
-              placeholder={NEW_PLACEHOLDER[sectionId] || NEW_PLACEHOLDER.default}
-              value={newName} onChange={e => setNewName(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && !creating && create()} />
-            <button className="btn btn-primary" onClick={create} disabled={creating}>
-              {creating ? 'Creando...' : (NEW_LABEL[sectionId] || 'Nueva carpeta')}
-            </button>
-          </div>
-          <p className="media-add-hint">
-            Escribe el nombre y crea la carpeta; luego entra en ella para subir sus archivos.
-          </p>
-          {msg && <span className={`media-add-msg ${msg.ok ? 'ok' : 'error'}`}>{msg.text}</span>}
-        </div>
-      )}
+      {msg && <div className={`media-add-msg ${msg.ok ? 'ok' : 'error'}`} style={{ display: 'block', marginBottom: 16 }}>{msg.text}</div>}
 
       {folders === null && !error && (
         <div className="media-folder-grid" aria-hidden="true">
@@ -114,7 +101,7 @@ export default function MediaSectionPage({ sectionId }) {
         <div className="empty">
           <div className="empty-text">Aún no hay contenido</div>
           <p className="access-empty-hint">
-            {canCreate ? 'Crea la primera carpeta con el campo de arriba.' : 'Todavía no se ha subido contenido a esta sección.'}
+            {canCreate ? `Crea la primera con el botón “${cfg.btn}”.` : 'Todavía no se ha subido contenido a esta sección.'}
           </p>
         </div>
       )}
@@ -136,6 +123,33 @@ export default function MediaSectionPage({ sectionId }) {
           ))}
         </div>
       )}
+
+      <Modal
+        open={modalOpen}
+        onClose={() => !creating && setModalOpen(false)}
+        title={cfg.title}
+        subtitle={`En ${section?.label}`}
+        footer={<>
+          <button className="btn btn-ghost" onClick={() => setModalOpen(false)} disabled={creating}>Cancelar</button>
+          <button className="btn btn-primary" onClick={create} disabled={creating || !newName.trim()}>
+            {creating ? 'Creando...' : 'Crear'}
+          </button>
+        </>}
+      >
+        <label className="field">
+          <span className="field-label">{cfg.label}</span>
+          <input
+            className="field-input"
+            autoFocus
+            value={newName}
+            placeholder={cfg.placeholder}
+            onChange={e => setNewName(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && !creating && newName.trim()) create() }}
+          />
+          {cfg.help && <span className="field-help">{cfg.help}</span>}
+          {err && <span className="field-error">{err}</span>}
+        </label>
+      </Modal>
     </>
   )
 }

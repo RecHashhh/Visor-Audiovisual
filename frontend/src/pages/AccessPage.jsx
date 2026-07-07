@@ -241,10 +241,9 @@ export default function AccessPage() {
 
 function UserRow({ user: u, isSelf, sectionItems, onPatch, onSetRole, onToggleCap, onRemove }) {
   const canManageAll = u.caps.manageAccess
-  const viewSections = u.caps.manageAccess ? '*' : u.sections
 
   function toggleSection(sectionId) {
-    const current = u.sections === '*' ? SECTIONS.map(s => s.id) : u.sections
+    const current = Array.isArray(u.sections) ? u.sections : []
     const next = current.includes(sectionId) ? current.filter(s => s !== sectionId) : [...current, sectionId]
     onPatch({ sections: next })
   }
@@ -305,35 +304,51 @@ function UserRow({ user: u, isSelf, sectionItems, onPatch, onSetRole, onToggleCa
             <p className="access-hint">Con “gestionar accesos” activo, ve todas las secciones y todo su contenido.</p>
           ) : (
             <div className="access-view">
-              {SECTIONS.map(s => {
-                const active = viewSections === '*' || (Array.isArray(viewSections) && viewSections.includes(s.id))
-                const scope = u.scopes[s.id]
-                const items = sectionItems[s.id] || []
-                return (
-                  <div key={s.id} className="access-view-row">
-                    <button className={`filter-chip ${active ? 'active' : ''}`} onClick={() => toggleSection(s.id)}>
-                      {s.label}
-                    </button>
-                    {active && items.length > 0 && (
-                      <div className="access-scope">
-                        <button className={`chip-mini ${!scope ? 'active' : ''}`} onClick={() => setScope(s.id, [])}>Todo</button>
-                        {items.map(it => {
-                          const on = Array.isArray(scope) && scope.includes(it.id)
-                          return (
-                            <button key={it.id} className={`chip-mini ${on ? 'active' : ''}`} title={it.label}
-                              onClick={() => {
-                                const cur = Array.isArray(scope) ? scope : []
-                                setScope(s.id, on ? cur.filter(x => x !== it.id) : [...cur, it.id])
-                              }}>
-                              {it.id}
-                            </button>
-                          )
-                        })}
-                      </div>
-                    )}
+              <label className="access-allsections">
+                <input type="checkbox" checked={u.sections === '*'}
+                  onChange={e => onPatch({ sections: e.target.checked ? '*' : [] })} />
+                <span>Ver <strong>todas</strong> las secciones</span>
+              </label>
+
+              {u.sections === '*' ? (
+                <p className="access-hint">Esta persona ve todas las secciones. Desmarca la casilla para elegir solo algunas.</p>
+              ) : (
+                <>
+                  <p className="access-hint">Marca las secciones que <strong>sí</strong> puede ver (las demás quedan ocultas):</p>
+                  <div className="access-view-list">
+                    {SECTIONS.map(s => {
+                      const active = Array.isArray(u.sections) && u.sections.includes(s.id)
+                      const scope = u.scopes[s.id]
+                      const items = sectionItems[s.id] || []
+                      return (
+                        <div key={s.id} className="access-view-row">
+                          <button className={`filter-chip ${active ? 'active' : ''}`} onClick={() => toggleSection(s.id)}>
+                            {active ? '✓ ' : ''}{s.label}
+                          </button>
+                          {active && items.length > 0 && (
+                            <div className="access-scope">
+                              <span className="access-scope-label">Solo:</span>
+                              <button className={`chip-mini ${!scope ? 'active' : ''}`} onClick={() => setScope(s.id, [])}>Todo</button>
+                              {items.map(it => {
+                                const on = Array.isArray(scope) && scope.includes(it.id)
+                                return (
+                                  <button key={it.id} className={`chip-mini ${on ? 'active' : ''}`} title={it.label}
+                                    onClick={() => {
+                                      const cur = Array.isArray(scope) ? scope : []
+                                      setScope(s.id, on ? cur.filter(x => x !== it.id) : [...cur, it.id])
+                                    }}>
+                                    {it.id}
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
                   </div>
-                )
-              })}
+                </>
+              )}
             </div>
           )}
         </div>

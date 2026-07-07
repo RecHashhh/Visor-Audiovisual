@@ -142,6 +142,9 @@ export const api = {
     Array.from(files).forEach(f => fd.append('files', f))
     return apiFetchForm(`/api/media/${section}/${encodeURIComponent(folder)}/upload`, fd)
   },
+  // Plan de subida directa navegador→blob para biblioteca (SAS por archivo).
+  postMediaUploadPlan: (section, folder, files) =>
+    apiFetch(`/api/media/${section}/${encodeURIComponent(folder)}/plan`, { method: 'POST', body: JSON.stringify({ files }) }),
   createShare:      (projectId, week, expiryDays) =>
     apiFetch('/api/share/create', { method: 'POST', body: JSON.stringify({ projectId, week, expiryDays }) }),
   listShares:       ()           => apiFetch('/api/share/list'),

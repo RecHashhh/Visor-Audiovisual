@@ -1808,6 +1808,60 @@ def media_upload(req: func.HttpRequest) -> func.HttpResponse:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# POST /api/media/{section}/{folder}/plan
+# Devuelve SAS de escritura por archivo para subir DIRECTO navegador→blob (sin
+# pasar por la Function), así se evitan los límites de tamaño del multipart y
+# los videos/artes de varios GB no dependen del timeout del servidor.
+# ══════════════════════════════════════════════════════════════════════════════
+@app.route(route="media/{section}/{folder}/plan", methods=["POST", "OPTIONS"])
+def media_upload_plan(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_ok()
+
+    section = (req.route_params.get("section") or "").strip().lower()
+    if section not in MEDIA_SECTIONS:
+        return err("Sección de media desconocida", 400)
+    folder = unquote(req.route_params.get("folder") or "").strip()
+    if not folder:
+        return err("Carpeta requerida", 400)
+
+    _, auth_err = require_perms(req, section=section, item=folder, cap="manageMedia")
+    if auth_err:
+        return auth_err
+
+    try:
+        body = req.get_json()
+    except Exception:
+        return err("Cuerpo JSON inválido", 400)
+    files_in = body.get("files") or []
+    if not isinstance(files_in, list) or not files_in:
+        return err("files: lista de archivos requerida", 400)
+    if len(files_in) > 500:
+        return err("Máximo 500 archivos por tanda", 400)
+
+    import mimetypes
+    prefix = f"{_media_root(section)}/{folder}/"
+    planned = []
+    for f in files_in:
+        if not isinstance(f, dict):
+            continue
+        name = os.path.basename(str(f.get("name") or "").strip())
+        if not name or name.startswith("."):
+            planned.append({"name": name or "(sin nombre)", "status": "omitido",
+                            "reason": "Nombre inválido", "blobPath": None, "sasUrl": None})
+            continue
+        blob_path = f"{prefix}{name}"
+        ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
+        planned.append({
+            "name": name, "status": "nuevo", "blobPath": blob_path,
+            "contentType": ctype,
+            "sasUrl": make_sas_url_write(blob_path, expiry_minutes=360),
+        })
+    return ok({"section": section, "folder": folder,
+               "total": len(planned), "files": planned})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # POST /api/index/refresh (manual)
 # ══════════════════════════════════════════════════════════════════════════════
 @app.route(route="index/refresh", methods=["POST", "OPTIONS"])

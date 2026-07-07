@@ -209,5 +209,23 @@ for (const shot of shots) {
   await ctx.close()
 }
 
+// Modal de crear carpeta (Marcas)
+async function interactiveShot(name, path, action) {
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: 'light' })
+  const page = await ctx.newPage()
+  await mockApis(page)
+  await page.addInitScript(() => { localStorage.setItem('ripcon-dev-preview', '1'); localStorage.setItem('ripcon-theme', 'light') })
+  await page.goto(`${BASE}${path}`, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(700)
+  await action(page)
+  await page.waitForTimeout(500)
+  await page.screenshot({ path: `${OUT}/${name}.png` })
+  console.log('shot:', name)
+  await ctx.close()
+}
+await interactiveShot('modal-crear', '/marcas', async (p) => { await p.getByRole('button', { name: 'Nueva marca' }).click() })
+await interactiveShot('modal-subir', '/marcas/RIPCONCIV', async (p) => { await p.getByRole('button', { name: 'Subir archivos' }).click() })
+await interactiveShot('accesos-viewer', '/accesos', async (p) => { await p.evaluate(() => window.scrollTo(0, document.body.scrollHeight)) })
+
 await browser.close()
 console.log('LISTO →', OUT)
