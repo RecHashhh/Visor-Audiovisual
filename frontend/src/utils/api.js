@@ -94,20 +94,6 @@ async function apiFetchBlob(path, options = {}) {
   return res.blob()
 }
 
-async function apiFetchForm(path, formData) {
-  const token = await getToken().catch(() => null)
-  if (!token) {
-    throw new Error(`API ${path} → no access token available`)
-  }
-  const headers = {}
-  headers['X-Access-Token'] = token
-  // Sin Content-Type manual: el navegador arma el boundary del multipart
-  const res = await fetch(path, { method: 'POST', body: formData, headers })
-  if (!res.ok) throw new Error(`API ${path} → ${res.status}`)
-  return res.json()
-}
-
-
 export const api = {
   getMe:            ()           => apiFetch('/api/me'),
   getAccessConfig:  ()           => apiFetch('/api/access'),
@@ -137,12 +123,9 @@ export const api = {
   getMediaFolder:   (section, folder) => apiFetch(`/api/media/${section}/${encodeURIComponent(folder)}`),
   createMediaFolder:(section, name) =>
     apiFetch(`/api/media/${section}`, { method: 'POST', body: JSON.stringify({ name }) }),
-  uploadMediaFiles: (section, folder, files) => {
-    const fd = new FormData()
-    Array.from(files).forEach(f => fd.append('files', f))
-    return apiFetchForm(`/api/media/${section}/${encodeURIComponent(folder)}/upload`, fd)
-  },
   // Plan de subida directa navegador→blob para biblioteca (SAS por archivo).
+  // (Antes había uploadMediaFiles multipart, pero chocaba con el límite de
+  // tamaño de la Function → 413; ahora TODO va directo al blob.)
   postMediaUploadPlan: (section, folder, files) =>
     apiFetch(`/api/media/${section}/${encodeURIComponent(folder)}/plan`, { method: 'POST', body: JSON.stringify({ files }) }),
   createShare:      (projectId, week, expiryDays) =>

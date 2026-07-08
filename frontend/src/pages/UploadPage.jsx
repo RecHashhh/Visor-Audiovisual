@@ -453,13 +453,24 @@ function LibraryUpload({ sections, me }) {
   }
 
   async function upload(e) {
-    const chosen = e.target.files
-    if (!chosen || !chosen.length || !folder) return
+    const chosen = Array.from(e.target.files || [])
+    if (!chosen.length || !folder) return
     setBusy(true); setMsg(null)
     try {
-      const res = await api.uploadMediaFiles(sectionId, folder, chosen)
-      const ok = res?.uploaded?.length || 0
-      const fail = res?.failed?.length || 0
+      // Subida DIRECTA al blob (SAS por archivo): no pasa por la Function, así
+      // los archivos grandes no chocan con el límite de tamaño (413).
+      const plan = await api.postMediaUploadPlan(sectionId, folder, chosen.map(f => ({ name: f.name, size: f.size })))
+      const planned = plan.files || []
+      let ok = 0, fail = 0
+      for (let i = 0; i < chosen.length; i++) {
+        const p = planned[i]
+        setMsg({ ok: true, text: `Subiendo ${i + 1}/${chosen.length}…` })
+        if (!p || p.status === 'omitido' || !p.sasUrl) { fail++; continue }
+        try {
+          await uploadFileToBlob(p.sasUrl, chosen[i], p.contentType)
+          ok++
+        } catch { fail++ }
+      }
       setMsg({ ok: fail === 0, text: `${ok} subido${ok !== 1 ? 's' : ''}${fail ? `, ${fail} con error` : ''}.` })
     } catch (e2) { setMsg({ ok: false, text: `No se pudo subir: ${e2.message}` }) }
     finally { setBusy(false); if (fileRef.current) fileRef.current.value = '' }
