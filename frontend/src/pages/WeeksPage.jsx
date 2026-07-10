@@ -14,13 +14,16 @@ export default function WeeksPage() {
   const [browse, setBrowse] = useState({ folders: [], files: [] })
   const [project, setProject] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
 
   useEffect(() => {
+    setLoading(true); setError(null)
     Promise.all([api.getBrowse(id, ''), api.getProjects()])
       .then(([tree, projects]) => {
         setBrowse(tree || { folders: [], files: [] })
         setProject(projects.find(p => p.code === id))
       })
+      .catch(e => setError(e.message))
       .finally(() => setLoading(false))
   }, [id])
 
@@ -48,9 +51,11 @@ export default function WeeksPage() {
       </div>
 
       {loading && <div className="loading"><div className="spinner"/></div>}
-      {!loading && browse.folders.length === 0 && browse.files.length === 0 && (
+      {!loading && error && (
+        <div className="alert alert-error" role="alert">No se pudo cargar: {error}</div>
+      )}
+      {!loading && !error && browse.folders.length === 0 && browse.files.length === 0 && (
         <div className="empty">
-          
           <div className="empty-text">Sin carpetas registradas en BLOB</div>
         </div>
       )}

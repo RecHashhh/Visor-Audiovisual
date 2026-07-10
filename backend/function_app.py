@@ -197,9 +197,21 @@ def list_folder_children(project_id: str, folder_path: str) -> Dict[str, list]:
     folder_map: Dict[str, Dict[str, Any]] = {}
     files: list = []
 
-    for blob in cc.list_blobs(name_starts_with=prefix):
+    for blob in cc.list_blobs(name_starts_with=prefix, include=["metadata"]):
         remainder = blob.name[len(prefix):]
         if not remainder:
+            continue
+
+        # Blobs-marcador de directorio (ADLS Gen2/HNS): son la carpeta, no un
+        # archivo. Sin esto se veían como "archivos directos" fantasma y, si la
+        # carpeta estaba vacía, la subcarpeta ni aparecía.
+        if _is_dir_marker(blob):
+            if "/" not in remainder:
+                folder_map.setdefault(f"{current}/{remainder}" if current else remainder, {
+                    "name": remainder,
+                    "path": f"{current}/{remainder}" if current else remainder,
+                    "count": 0, "types": set(), "lastModified": None,
+                })
             continue
 
         leaf_name = remainder.split("/")[-1]

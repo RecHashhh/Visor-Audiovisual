@@ -98,6 +98,7 @@ export default function GalleryPage() {
   const [thumbCache, setThumbCache] = useState({})
   const closeTimerRef = useRef(null)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
   const [filter, setFilter] = useState('all')
   const [sizeFilter, setSizeFilter] = useState('all')
   const [viewer, setViewer] = useState(null)  // { idx, url, file, kind, width, height, metaLoading }
@@ -139,11 +140,13 @@ export default function GalleryPage() {
   useEffect(() => {
     setLoading(true)
     setBrowse({ folders: [], files: [] })
+    setLoadError(null)
     setViewer(null)
     setPreviewOpen(false)
 
     api.getBrowse(id, week || '')
       .then(setBrowse)
+      .catch(e => setLoadError(e.message))
       .finally(() => setLoading(false))
   }, [id, week])
 
@@ -347,8 +350,11 @@ export default function GalleryPage() {
       )}
 
       {loading && <div className="loading"><div className="spinner"/></div>}
+      {!loading && loadError && (
+        <div className="alert alert-error" role="alert">No se pudo cargar: {loadError}</div>
+      )}
 
-      {!loading && (
+      {!loading && !loadError && (
         <div className={`gallery-split ${viewer ? 'has-preview' : 'no-preview'}`}>
           <div className="gallery-main">
             {folders.length > 0 && (
