@@ -79,11 +79,25 @@ function ProjectUpload() {
 
   const [source, setSource] = useState('local') // 'local' | 'sharepoint' | 'onedrive'
   const [result, setResult] = useState(null)
+  const [subfolders, setSubfolders] = useState([])   // carpetas de primer nivel del proyecto
+  const [subfolder, setSubfolder] = useState('')     // destino elegido ('' = raíz)
 
   const selected = projects.find(p => p.code === selectedCode)
   const activeCode = projectMode === 'existing' ? selectedCode : newCode.trim()
   const activeName = projectMode === 'existing' ? (selected?.name || '') : newName.trim()
   const ready = Boolean(activeCode && activeName)
+
+  // Si el proyecto tiene subcarpetas (p. ej. consorcio: rio-guayllabamba /
+  // tamauco), ofrecemos elegir a cuál va la subida. Si no, se sube a la raíz.
+  useEffect(() => {
+    setSubfolders([]); setSubfolder('')
+    if (projectMode !== 'existing' || !selectedCode) return
+    let alive = true
+    api.getBrowse(selectedCode, '')
+      .then(d => { if (alive) setSubfolders((d?.folders || []).map(f => f.name)) })
+      .catch(() => { if (alive) setSubfolders([]) })
+    return () => { alive = false }
+  }, [projectMode, selectedCode])
 
   const filtered = projects.filter(p => {
     const t = search.trim().toLowerCase()
@@ -187,6 +201,19 @@ function ProjectUpload() {
           </div>
         </div>
 
+        {subfolders.length > 0 && (
+          <div className="up-section">
+            <div className="up-section-title">Carpeta del proyecto</div>
+            <select className="up-right-select" value={subfolder} onChange={e => { setSubfolder(e.target.value); setResult(null) }} style={{ width: '100%' }}>
+              <option value="">Raíz del proyecto</option>
+              {subfolders.map(sf => <option key={sf} value={sf}>{sf}</option>)}
+            </select>
+            <p className="up-hint" style={{ marginTop: 6 }}>
+              Este proyecto tiene subcarpetas. Elige a cuál va la subida (se seguirá organizando por semana dentro de ella).
+            </p>
+          </div>
+        )}
+
         <div className="up-section">
           <div className="up-section-title">Origen</div>
           <div className="up-mode-tabs">
@@ -196,11 +223,11 @@ function ProjectUpload() {
           </div>
 
           {source === 'local' && (
-            <LocalSource projectCode={activeCode} projectName={activeName} prefijo={prefijo}
+            <LocalSource projectCode={activeCode} projectName={activeName} prefijo={prefijo} subfolder={subfolder}
               keepNames={keepNames} setKeepNames={setKeepNames} refreshIndex={refreshIndex} ready={ready} />
           )}
           {(source === 'sharepoint' || source === 'onedrive') && (
-            <RemoteSource source={source} projectCode={activeCode} projectName={activeName} prefijo={prefijo}
+            <RemoteSource source={source} projectCode={activeCode} projectName={activeName} prefijo={prefijo} subfolder={subfolder}
               recursive={recursive} refreshIndex={refreshIndex} ready={ready} />
           )}
         </div>
@@ -210,7 +237,7 @@ function ProjectUpload() {
 }
 
 /* ── Fuente: Mi equipo (directo navegador→blob) ── */
-function LocalSource({ projectCode, projectName, prefijo, keepNames, setKeepNames, refreshIndex, ready }) {
+function LocalSource({ projectCode, projectName, prefijo, subfolder, keepNames, setKeepNames, refreshIndex, ready }) {
   const [files, setFiles] = useState([])
   const [rows, setRows] = useState([])
   const [busy, setBusy] = useState(false)
@@ -232,7 +259,7 @@ function LocalSource({ projectCode, projectName, prefijo, keepNames, setKeepName
     setBusy(true); setMsg(null)
     try {
       const plan = await api.postUploadLocalPlan({
-        projectCode, projectName, prefijo, keepNames,
+        projectCode, projectName, prefijo, keepNames, subfolder,
         files: files.map(({ name, size, lastModified, relativePath }) => ({ name, size, lastModified, relativePath })),
       })
       setRows(plan.files.map((p) => ({
@@ -303,7 +330,7 @@ function LocalSource({ projectCode, projectName, prefijo, keepNames, setKeepName
 }
 
 /* ── Fuente: SharePoint / OneDrive (migración por lotes con progreso) ── */
-function RemoteSource({ source, projectCode, projectName, prefijo, recursive, refreshIndex, ready }) {
+function RemoteSource({ source, projectCode, projectName, prefijo, subfolder, recursive, refreshIndex, ready }) {
   const [spUrl, setSpUrl] = useState('')
   const [odEmail, setOdEmail] = useState('')
   const [odFolder, setOdFolder] = useState('/')
@@ -317,7 +344,7 @@ function RemoteSource({ source, projectCode, projectName, prefijo, recursive, re
     if (!ready) { setMsg({ ok: false, text: 'Elige un proyecto primero.' }); return }
     setPlanning(true); setMsg(null); setPlan(null); setProgress(null)
     try {
-      const payload = { source, projectCode, projectName, prefijo, recursive }
+      const payload = { source, projectCode, projectName, prefijo, recursive, subfolder }
       if (source === 'sharepoint') payload.sharepointUrl = spUrl.trim()
       else { payload.userEmail = odEmail.trim(); payload.folderPath = odFolder.trim() || '/' }
       const p = await api.postRemotePlan(payload)

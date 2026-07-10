@@ -2387,9 +2387,14 @@ def upload_local_plan(req: func.HttpRequest) -> func.HttpResponse:
     prefijo      = (body.get("prefijo") or "FOT").strip().upper()
     keep_names   = bool(body.get("keepNames"))
     files_in     = body.get("files") or []
+    # Subcarpeta opcional dentro del proyecto (p. ej. "rio-guayllabamba"): las
+    # rutas quedan proyecto/subcarpeta/semana/archivo.
+    subfolder    = _sanitize_folder_path(body.get("subfolder", ""))
 
     if not project_code or not project_name:
         return err("projectCode y projectName son requeridos", 400)
+    if subfolder is None:
+        return err("Subcarpeta inválida", 400)
     if not isinstance(files_in, list) or not files_in:
         return err("files: lista de archivos requerida", 400)
     if len(files_in) > _LOCAL_PLAN_MAX_FILES:
@@ -2397,8 +2402,9 @@ def upload_local_plan(req: func.HttpRequest) -> func.HttpResponse:
 
     try:
         carpeta = uploader._resolve_carpeta(project_code, project_name)
+        base = f"{carpeta}/{subfolder}" if subfolder else carpeta
         svc = get_blob_service()
-        blob_index = uploader.construir_blob_index(svc, prefix=f"{carpeta}/")
+        blob_index = uploader.construir_blob_index(svc, prefix=f"{base}/")
 
         def fecha_de(entry: Dict[str, Any]) -> datetime:
             texto = " | ".join(filter(None, [str(entry.get("relativePath") or ""), str(entry.get("name") or "")]))
@@ -2442,7 +2448,7 @@ def upload_local_plan(req: func.HttpRequest) -> func.HttpResponse:
                     s for s in (_sanitize_rel_segment(p) for p in e["relativePath"].split("/")[:-1]) if s
                 ) if e["relativePath"] else ""
                 folder = rel_dir or "General"
-                blob_path = f"{carpeta}/{folder}/{e['name']}"
+                blob_path = f"{base}/{folder}/{e['name']}"
                 nombre_final = e["name"]
             else:
                 pref = uploader.detectar_prefijo(e["name"], prefijo)
@@ -2457,7 +2463,7 @@ def upload_local_plan(req: func.HttpRequest) -> func.HttpResponse:
                 clave = f"{pref}_{e['fecha'].strftime('%Y%m%d')}"
                 contadores[clave] = contadores.get(clave, 0) + 1
                 nombre_final = uploader.renombrar_archivo(e["name"], e["fecha"], contadores[clave], prefijo)
-                blob_path = f"{carpeta}/{semana}/{nombre_final}"
+                blob_path = f"{base}/{semana}/{nombre_final}"
 
             if blob_path in blob_index:
                 planned.append({
@@ -2549,9 +2555,12 @@ def upload_remote_plan(req: func.HttpRequest) -> func.HttpResponse:
     project_name  = (body.get("projectName") or "").strip()
     prefijo       = (body.get("prefijo") or "FOT").strip().upper()
     recursive     = bool(body.get("recursive") if body.get("recursive") is not None else True)
+    subfolder     = _sanitize_folder_path(body.get("subfolder", ""))
 
     if not project_code or not project_name:
         return err("projectCode y projectName son requeridos", 400)
+    if subfolder is None:
+        return err("Subcarpeta inválida", 400)
 
     try:
         token = uploader._get_graph_token()
@@ -2574,8 +2583,9 @@ def upload_remote_plan(req: func.HttpRequest) -> func.HttpResponse:
             archivos = uploader.list_sharepoint_files(token, site_id, folder, recursive)
 
         carpeta = uploader._resolve_carpeta(project_code, project_name)
-        trabajos = uploader._preparar_trabajos(archivos, carpeta, prefijo)
-        blob_index = uploader.construir_blob_index(get_blob_service(), prefix=f"{carpeta}/")
+        base = f"{carpeta}/{subfolder}" if subfolder else carpeta
+        trabajos = uploader._preparar_trabajos(archivos, base, prefijo)
+        blob_index = uploader.construir_blob_index(get_blob_service(), prefix=f"{base}/")
 
         files = []
         nuevos = existentes = total_bytes = 0
