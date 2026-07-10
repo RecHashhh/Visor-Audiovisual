@@ -356,6 +356,39 @@ def list_onedrive_files(
     return files
 
 
+def list_drive_tree(
+    token: str,
+    base_drive_url: str,
+    folder_path: str = "/",
+    recursive: bool = True,
+) -> List[Tuple[str, dict]]:
+    """Como _listar_archivos_drive pero conservando la RUTA RELATIVA de cada
+    archivo respecto a la carpeta pedida. Devuelve [(relDir, item), ...] con
+    relDir = "" para la raíz, "sub", "sub/sub2", etc. Para biblioteca (media),
+    donde se preserva la estructura de subcarpetas."""
+    pend: List[Tuple[str, str]] = [(_url_children(base_drive_url, folder_path), "")]
+    out: List[Tuple[str, dict]] = []
+    while pend:
+        url, rel = pend.pop(0)
+        for item in _graph_list_all(token, url):
+            if "file" in item:
+                out.append((rel, item))
+            elif recursive and "folder" in item:
+                drive_id = item.get("parentReference", {}).get("driveId")
+                item_id = item.get("id")
+                if drive_id and item_id:
+                    child_rel = f"{rel}/{item.get('name', '')}" if rel else item.get("name", "")
+                    pend.append((f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/children", child_rel))
+    return out
+
+
+def graph_drive_base(source: str, site_id: str = "", user_email: str = "") -> str:
+    """URL base del drive según el origen (SharePoint por site, OneDrive por usuario)."""
+    if source == "onedrive":
+        return f"{GRAPH_BASE}/users/{user_email}/drive"
+    return f"{GRAPH_BASE}/sites/{site_id}/drive"
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # 4. BLOB INDEX — 1 operación de lista en lugar de N blob.exists()
 # ════════════════════════════════════════════════════════════════════════════

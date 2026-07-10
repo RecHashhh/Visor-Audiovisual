@@ -2684,3 +2684,157 @@ def upload_remote_batch(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as exc:
         logging.error("upload_remote_batch: %s", exc)
         return err(str(exc), 500)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BIBLIOTECA (media) desde SharePoint / OneDrive — conserva nombres y estructura
+# POST /api/upload/remote/media/plan  → lista + calcula rutas destino
+# POST /api/upload/remote/media/batch → transfiere una tanda (omite existentes)
+# ══════════════════════════════════════════════════════════════════════════════
+def _remote_media_source(body: dict, token: str):
+    """Resuelve (base_drive_url, source_folder) según el origen. Lanza ValueError."""
+    source = (body.get("source") or "sharepoint").strip().lower()
+    if source == "onedrive":
+        user_email = (body.get("userEmail") or "").strip()
+        if not user_email:
+            raise ValueError("userEmail es requerido para OneDrive")
+        return "onedrive", uploader.graph_drive_base("onedrive", user_email=user_email), (body.get("sourceFolder") or "/").strip()
+    sp_url  = (body.get("sharepointUrl") or "").strip()
+    site_id = (body.get("siteId") or "").strip()
+    folder  = (body.get("sourceFolder") or "/").strip()
+    if sp_url and not site_id:
+        cfg = uploader.resolver_sharepoint_desde_url(sp_url)
+        site_id = cfg.get("site_id") or ""
+        folder  = cfg.get("folder_path") or "/"
+    if not site_id:
+        raise ValueError("No se pudo resolver el sitio de SharePoint")
+    return "sharepoint", uploader.graph_drive_base("sharepoint", site_id=site_id), folder
+
+
+@app.route(route="upload/remote/media/plan", methods=["POST", "OPTIONS"])
+def upload_remote_media_plan(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_ok()
+    try:
+        body = req.get_json()
+    except Exception:
+        return err("Cuerpo JSON inválido", 400)
+
+    section = (body.get("section") or "").strip().lower()
+    if section not in MEDIA_SECTIONS:
+        return err("Sección de media desconocida", 400)
+    dest = _sanitize_folder_path(body.get("destPath", ""))
+    if dest is None:
+        return err("Ruta de carpeta destino inválida", 400)
+    if not dest:
+        return err("destPath requerido: elige la carpeta destino", 400)
+    recursive = bool(body.get("recursive") if body.get("recursive") is not None else True)
+
+    _, auth_err = require_perms(req, section=section, item=_root_of(dest), cap="manageMedia")
+    if auth_err:
+        return auth_err
+
+    try:
+        token = uploader._get_graph_token()
+        source, base_drive, src_folder = _remote_media_source(body, token)
+        tree = uploader.list_drive_tree(token, base_drive, src_folder, recursive)
+
+        base_prefix = f"{_media_root(section)}/{dest}"
+        blob_index = uploader.construir_blob_index(get_blob_service(), prefix=f"{base_prefix}/")
+
+        files = []
+        nuevos = existentes = total_bytes = 0
+        for rel, item in tree:
+            name = os.path.basename(str(item.get("name") or "").strip())
+            if not name or name.startswith("."):
+                continue
+            rel_clean = _sanitize_folder_path(rel)  # conserva subcarpetas; None si inválida
+            rel_clean = rel_clean or ""
+            blob_path = f"{base_prefix}/{rel_clean}/{name}" if rel_clean else f"{base_prefix}/{name}"
+
+            drive_id = item.get("parentReference", {}).get("driveId")
+            item_id = item.get("id")
+            dl_url = (f"{uploader.GRAPH_BASE}/drives/{drive_id}/items/{item_id}/content"
+                      if drive_id and item_id else item.get("@microsoft.graph.downloadUrl"))
+            if not dl_url:
+                continue
+
+            exists = blob_path in blob_index
+            if exists:
+                existentes += 1
+            else:
+                nuevos += 1
+                total_bytes += int(item.get("size") or 0)
+            files.append({
+                "orig": name, "name": name, "relDir": rel_clean,
+                "blobPath": blob_path, "dlUrl": dl_url,
+                "size": int(item.get("size") or 0),
+                "status": "existe" if exists else "nuevo",
+            })
+
+        return ok({
+            "source": source, "section": section, "destPath": dest,
+            "total": len(files), "nuevos": nuevos, "existentes": existentes,
+            "totalBytesNuevos": total_bytes, "files": files,
+        })
+    except ValueError as ve:
+        return err(str(ve), 400)
+    except Exception as exc:
+        logging.error("upload_remote_media_plan: %s", exc)
+        return err(str(exc), 500)
+
+
+@app.route(route="upload/remote/media/batch", methods=["POST", "OPTIONS"])
+def upload_remote_media_batch(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_ok()
+    try:
+        body = req.get_json()
+    except Exception:
+        return err("Cuerpo JSON inválido", 400)
+
+    section = (body.get("section") or "").strip().lower()
+    if section not in MEDIA_SECTIONS:
+        return err("Sección de media desconocida", 400)
+    dest = _sanitize_folder_path(body.get("destPath", ""))
+    if not dest:
+        return err("destPath requerido", 400)
+    items  = body.get("items") or []
+    budget = min(int(body.get("budgetSeconds") or _REMOTE_BATCH_BUDGET_S), _REMOTE_BATCH_BUDGET_S)
+    if not isinstance(items, list) or not items:
+        return err("items: lista requerida", 400)
+    if len(items) > 1000:
+        return err("Máximo 1000 ítems por tanda", 400)
+
+    _, auth_err = require_perms(req, section=section, item=_root_of(dest), cap="manageMedia")
+    if auth_err:
+        return auth_err
+
+    prefix_ok = f"{_media_root(section)}/{dest}/"
+    try:
+        svc = get_blob_service()
+        token = uploader._get_graph_token()
+        results = []
+        processed = 0
+        started = time.monotonic()
+        for it in items:
+            if time.monotonic() - started > budget:
+                break
+            dl_url    = str((it or {}).get("dlUrl") or "")
+            blob_path = str((it or {}).get("blobPath") or "")
+            name      = str((it or {}).get("name") or os.path.basename(blob_path))
+            if not blob_path.startswith(prefix_ok) or not dl_url.startswith(uploader.GRAPH_BASE):
+                results.append({"blobPath": blob_path, "status": "error", "error": "Ruta u origen no válidos"})
+                processed += 1
+                continue
+            status, error = _remote_transfer_one(svc, token, dl_url, blob_path, name)
+            results.append({"blobPath": blob_path, "status": status, "error": error})
+            processed += 1
+
+        return ok({
+            "processed": processed, "total": len(items),
+            "done": processed >= len(items), "results": results,
+        })
+    except Exception as exc:
+        logging.error("upload_remote_media_batch: %s", exc)
+        return err(str(exc), 500)

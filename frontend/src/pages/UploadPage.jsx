@@ -413,9 +413,121 @@ function RemoteSource({ source, projectCode, projectName, prefijo, recursive, re
   )
 }
 
+/* ── Biblioteca desde SharePoint/OneDrive (conserva nombres y estructura) ── */
+function MediaRemoteSource({ section, destPath, ready }) {
+  const [rsource, setRsource] = useState('sharepoint')
+  const [spUrl, setSpUrl] = useState('')
+  const [odEmail, setOdEmail] = useState('')
+  const [odFolder, setOdFolder] = useState('/')
+  const [plan, setPlan] = useState(null)
+  const [planning, setPlanning] = useState(false)
+  const [progress, setProgress] = useState(null)
+  const [running, setRunning] = useState(false)
+  const [msg, setMsg] = useState(null)
+
+  async function doPlan() {
+    if (!ready) { setMsg({ ok: false, text: 'Elige una carpeta destino primero.' }); return }
+    setPlanning(true); setMsg(null); setPlan(null); setProgress(null)
+    try {
+      const payload = { source: rsource, section, destPath }
+      if (rsource === 'sharepoint') payload.sharepointUrl = spUrl.trim()
+      else { payload.userEmail = odEmail.trim(); payload.sourceFolder = odFolder.trim() || '/' }
+      const p = await api.postRemoteMediaPlan(payload)
+      setPlan(p)
+      if (p.total === 0) setMsg({ ok: false, text: 'No se encontraron archivos en esa ubicación.' })
+    } catch (e) { setMsg({ ok: false, text: `No se pudo analizar: ${e.message}` }) }
+    finally { setPlanning(false) }
+  }
+
+  async function migrate() {
+    const todo = (plan?.files || []).filter(f => f.status === 'nuevo')
+    if (!todo.length) { setMsg({ ok: false, text: 'No hay archivos nuevos para migrar.' }); return }
+    setRunning(true); setMsg(null)
+    let done = 0, failed = 0
+    setProgress({ done, failed, total: todo.length })
+    let queue = [...todo]
+    try {
+      while (queue.length) {
+        const chunk = queue.slice(0, REMOTE_CHUNK)
+        const res = await api.postRemoteMediaBatch({
+          section, destPath,
+          items: chunk.map(f => ({ dlUrl: f.dlUrl, blobPath: f.blobPath, name: f.name })),
+        })
+        ;(res.results || []).forEach(r => { if (r.status === 'ok' || r.status === 'existe') done++; else failed++ })
+        const processed = res.processed || 0
+        queue = queue.slice(processed || chunk.length)
+        setProgress({ done, failed, total: todo.length })
+        if (processed === 0) throw new Error('El servidor no pudo procesar la tanda')
+      }
+      setMsg({ ok: failed === 0, text: `Migración completa: ${done} subidos${failed ? `, ${failed} con error` : ''}.` })
+    } catch (e) { setMsg({ ok: false, text: `Se detuvo: ${e.message}. Vuelve a "Migrar" y continúa donde quedó.` }) }
+    finally { setRunning(false) }
+  }
+
+  const pct = progress && progress.total ? Math.round(((progress.done + progress.failed) / progress.total) * 100) : 0
+
+  return (
+    <div className="up-remote">
+      <div className="radio-group" style={{ marginBottom: 10 }}>
+        <label className="radio-option"><input type="radio" checked={rsource === 'sharepoint'} onChange={() => setRsource('sharepoint')} /> SharePoint</label>
+        <label className="radio-option"><input type="radio" checked={rsource === 'onedrive'} onChange={() => setRsource('onedrive')} /> OneDrive</label>
+      </div>
+      {rsource === 'sharepoint' ? (
+        <div>
+          <label className="up-right-label">URL de la carpeta de SharePoint</label>
+          <input className="up-right-input" value={spUrl} onChange={e => setSpUrl(e.target.value)}
+            placeholder="https://empresa.sharepoint.com/sites/…/Manuales" />
+        </div>
+      ) : (
+        <div className="up-row2">
+          <div>
+            <label className="up-right-label">Correo del usuario</label>
+            <input className="up-right-input" value={odEmail} onChange={e => setOdEmail(e.target.value)} placeholder="usuario@ripconciv.com" />
+          </div>
+          <div>
+            <label className="up-right-label">Carpeta</label>
+            <input className="up-right-input" value={odFolder} onChange={e => setOdFolder(e.target.value)} placeholder="/Marca/Logos" />
+          </div>
+        </div>
+      )}
+
+      <div className="up-pickers" style={{ marginTop: 12 }}>
+        <button type="button" className="up-btn-ghost" onClick={doPlan} disabled={planning || running}>
+          {planning ? 'Analizando…' : 'Analizar (contar archivos)'}
+        </button>
+        {plan && plan.nuevos > 0 && (
+          <button type="button" className="up-btn-primary" onClick={migrate} disabled={running}>
+            {running ? 'Migrando…' : `Migrar ${plan.nuevos} archivo${plan.nuevos !== 1 ? 's' : ''}`}
+          </button>
+        )}
+      </div>
+
+      {plan && (
+        <div className="up-plan-summary">
+          <span><strong>{plan.total}</strong> encontrados</span>
+          <span className="ok"><strong>{plan.nuevos}</strong> nuevos</span>
+          <span className="muted"><strong>{plan.existentes}</strong> ya subidos</span>
+          {plan.totalBytesNuevos > 0 && <span className="muted">{fmtSize(plan.totalBytesNuevos)} por transferir</span>}
+        </div>
+      )}
+
+      {progress && (
+        <div className="up-migrate-progress">
+          <div className="up-progress" style={{ width: '100%' }}><div className="up-progress-bar" style={{ width: `${pct}%` }} /></div>
+          <div className="up-migrate-counts">{progress.done + progress.failed} de {progress.total} · {progress.failed > 0 && <span style={{ color: 'var(--red)' }}>{progress.failed} con error</span>}</div>
+        </div>
+      )}
+
+      <p className="up-hint">Conserva los nombres y la estructura de subcarpetas tal cual. Va del servidor al almacenamiento en tandas; si se pausa, vuelve a “Migrar” y continúa (lo ya subido se omite).</p>
+      {msg && <div className={`alert ${msg.ok ? 'alert-ok' : 'alert-error'}`} style={{ marginTop: 8 }}>{msg.text}</div>}
+    </div>
+  )
+}
+
 /* ═══════════════════════════ DESTINO: BIBLIOTECA ═══════════════════════════ */
 function LibraryUpload({ sections, me }) {
   const { enqueue } = useUploads()
+  const [libSource, setLibSource] = useState('local') // 'local' | 'remote'
   const [sectionId, setSectionId] = useState(sections[0]?.id || '')
   const [folders, setFolders] = useState([])
   const [folder, setFolder] = useState('')
@@ -501,13 +613,22 @@ function LibraryUpload({ sections, me }) {
         <button className="btn btn-ghost" onClick={createFolder} disabled={busy || !newFolder.trim()}>Crear carpeta</button>
       </div>
 
-      <div className="up-lib-upload">
-        <input ref={fileRef} type="file" multiple hidden onChange={upload} />
-        <button className="btn btn-primary" onClick={() => fileRef.current?.click()} disabled={busy || !folder}>
-          Subir archivos a esta carpeta
-        </button>
-        <span className="up-hint">Los archivos conservan su nombre original. Ideal para logos, plantillas, PDFs y material gráfico.</span>
+      <div className="radio-group" style={{ marginTop: 8 }}>
+        <label className="radio-option"><input type="radio" checked={libSource === 'local'} onChange={() => setLibSource('local')} /> Mi equipo</label>
+        <label className="radio-option"><input type="radio" checked={libSource === 'remote'} onChange={() => setLibSource('remote')} /> SharePoint / OneDrive</label>
       </div>
+
+      {libSource === 'local' ? (
+        <div className="up-lib-upload">
+          <input ref={fileRef} type="file" multiple hidden onChange={upload} />
+          <button className="btn btn-primary" onClick={() => fileRef.current?.click()} disabled={busy || !folder}>
+            Subir archivos a esta carpeta
+          </button>
+          <span className="up-hint">Los archivos conservan su nombre original. Ideal para logos, plantillas, PDFs y material gráfico.</span>
+        </div>
+      ) : (
+        <MediaRemoteSource section={sectionId} destPath={folder} ready={!!folder} />
+      )}
 
       {msg && <div className={`alert ${msg.ok ? 'alert-ok' : 'alert-error'}`}>{msg.text}</div>}
     </div>
