@@ -1668,6 +1668,12 @@ def _root_of(path: str) -> str:
     """Carpeta raíz de una ruta anidada: 'Grupo Ripcon/RIPCONCIV' → 'Grupo Ripcon'."""
     return path.split("/", 1)[0] if path else ""
 
+def _is_dir_marker(blob) -> bool:
+    """True si el blob es un marcador de directorio de ADLS Gen2 (HNS): la carpeta
+    misma, no un archivo. Requiere listar con include=["metadata"]."""
+    md = getattr(blob, "metadata", None) or {}
+    return str(md.get("hdi_isfolder", "")).lower() == "true"
+
 @app.route(route="media/{section}", methods=["GET", "POST", "OPTIONS"])
 def media_section(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
@@ -1745,7 +1751,9 @@ def _media_list(req: func.HttpRequest, section: str) -> func.HttpResponse:
         # ── Árbol plano: todas las rutas de carpeta bajo `path` (para selectores) ──
         if want_tree:
             nodes: Dict[str, Dict[str, Any]] = {}
-            for blob in cc.list_blobs(name_starts_with=prefix):
+            for blob in cc.list_blobs(name_starts_with=prefix, include=["metadata"]):
+                if _is_dir_marker(blob):
+                    continue
                 segments = blob.name[len(prefix):].split("/")
                 leaf = segments[-1]
                 for depth in range(1, len(segments)):
@@ -1764,10 +1772,18 @@ def _media_list(req: func.HttpRequest, section: str) -> func.HttpResponse:
         meta = None
         found_any = False
 
-        for blob in cc.list_blobs(name_starts_with=prefix):
+        for blob in cc.list_blobs(name_starts_with=prefix, include=["metadata"]):
             found_any = True
             remainder = blob.name[len(prefix):]
             if not remainder:
+                continue
+            # Blobs-marcador de directorio (ADLS Gen2 / HNS): son la carpeta misma,
+            # no un archivo. Sin esto aparecían como "archivos" fantasma de 0 bytes.
+            if _is_dir_marker(blob):
+                if "/" not in remainder:
+                    node = folders.setdefault(remainder, {"name": remainder,
+                        "path": f"{path}/{remainder}" if path else remainder,
+                        "fileCount": 0, "lastModified": None})  # asegura que la carpeta exista aunque esté vacía
                 continue
             if "/" in remainder:
                 sub = remainder.split("/", 1)[0]
