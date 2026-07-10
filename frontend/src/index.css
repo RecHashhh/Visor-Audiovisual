@@ -2088,6 +2088,19 @@ code { font-family: var(--font-mono); background: var(--bg3); padding: 2px 6px; 
 .html-frame-wrap { padding: 18px; background: #ffffff; overflow: auto; }
 .html-frame { width: 100%; min-height: 120px; border: 0; background: #ffffff; display: block; }
 
+/* Descripción de carpeta (ficha) */
+.media-folder-desc { color: var(--text-dim); font-size: 0.95rem; line-height: 1.55; max-width: 70ch; margin: 4px 0 22px; }
+
+/* Editor de ficha (colores) */
+.field-opt { font-weight: 400; color: var(--text-faint); }
+.ficha-colors { display: grid; gap: 8px; margin-bottom: 10px; }
+.ficha-color-row { display: flex; align-items: center; gap: 8px; }
+.ficha-color-swatch { width: 38px; height: 38px; flex: none; padding: 0; border: 1px solid var(--border-hi); border-radius: 8px; background: none; cursor: pointer; }
+.ficha-color-hex { max-width: 110px; flex: none; font-family: var(--font-mono); }
+.ficha-color-row .field-input { margin-bottom: 0; }
+.ficha-archetype { border-top: 1px solid var(--border); padding-top: 14px; }
+textarea.field-input { resize: vertical; min-height: 60px; font-family: var(--font-body); }
+
 /* ── Bandeja de subidas en segundo plano (abajo a la derecha) ─────────────── */
 .uptray {
   position: fixed; right: 20px; bottom: 20px; z-index: 90;

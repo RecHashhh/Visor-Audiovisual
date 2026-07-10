@@ -3,7 +3,7 @@
 // carpetas y permite crear nuevas (a quien tenga la capacidad manageMedia).
 // Sirve para Marcas, Documentos, Videos, Eventos y Redes.
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../utils/api'
 import { useAuthz, hasCap, canItem } from '../utils/authz'
 import { sectionById } from '../config/sections'
@@ -35,6 +35,7 @@ const DEFAULT_FIELDS = { btn: 'Nueva carpeta', title: 'Nueva carpeta', label: 'N
 export default function MediaSectionPage({ sectionId }) {
   const section = sectionById(sectionId)
   const cfg = NEW_FIELDS[sectionId] || DEFAULT_FIELDS
+  const navigate = useNavigate()
   const { me } = useAuthz()
   const canCreate = hasCap(me, 'manageMedia')
   const [folders, setFolders] = useState(null)
@@ -42,6 +43,7 @@ export default function MediaSectionPage({ sectionId }) {
   const [modalOpen, setModalOpen] = useState(false)
   const [newName, setNewName] = useState('')
   const [creating, setCreating] = useState(false)
+  const [addFicha, setAddFicha] = useState(false)
   const [err, setErr] = useState(null)
   const [msg, setMsg] = useState(null)
 
@@ -53,15 +55,19 @@ export default function MediaSectionPage({ sectionId }) {
   }
   useEffect(() => { setFolders(null); load() }, [sectionId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  function openModal() { setNewName(''); setErr(null); setModalOpen(true) }
+  function openModal() { setNewName(''); setAddFicha(false); setErr(null); setModalOpen(true) }
 
   async function create() {
     const name = newName.trim()
     if (!name) { setErr('Escribe un nombre.'); return }
     setCreating(true); setErr(null)
     try {
-      await api.createMediaFolder(sectionId, name)
+      const res = await api.createMediaFolder(sectionId, name)
       setModalOpen(false)
+      if (addFicha) {
+        navigate(`${section.path}/${encodeURIComponent(res?.path || name)}?ficha=1`)
+        return
+      }
       setMsg({ ok: true, text: `“${name}” creada. Entra en ella para subir su contenido.` })
       load()
     } catch (e) {
@@ -149,6 +155,10 @@ export default function MediaSectionPage({ sectionId }) {
           />
           {cfg.help && <span className="field-help">{cfg.help}</span>}
           {err && <span className="field-error">{err}</span>}
+        </label>
+        <label className="checkbox-inline">
+          <input type="checkbox" checked={addFicha} onChange={e => setAddFicha(e.target.checked)} />
+          <span>Agregar ficha (descripción, colores{sectionId === 'marcas' ? ', arquetipo' : ''}…) al crear</span>
         </label>
       </Modal>
     </>

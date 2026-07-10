@@ -1882,6 +1882,91 @@ def media_upload_plan(req: func.HttpRequest) -> func.HttpResponse:
                "total": len(planned), "files": planned})
 
 
+def _sanitize_media_meta(raw: Any, section: str) -> dict:
+    """Ficha opcional de una carpeta (meta.json). Descripción y colores en toda
+    sección; el arquetipo solo en Marcas."""
+    if not isinstance(raw, dict):
+        return {}
+    out: Dict[str, Any] = {}
+    name = str(raw.get("name") or "").strip()[:80]
+    if name:
+        out["name"] = name
+    tagline = str(raw.get("tagline") or "").strip()[:160]
+    if tagline:
+        out["tagline"] = tagline
+    desc = str(raw.get("description") or "").strip()[:2000]
+    if desc:
+        out["description"] = desc
+    colors = raw.get("colors")
+    if isinstance(colors, list):
+        clean = []
+        for c in colors[:16]:
+            if not isinstance(c, dict):
+                continue
+            hexv = str(c.get("hex") or "").strip()[:9]
+            if not hexv:
+                continue
+            clean.append({
+                "hex": hexv,
+                "name": str(c.get("name") or "").strip()[:40],
+                "role": str(c.get("role") or "").strip()[:60],
+            })
+        if clean:
+            out["colors"] = clean
+    if section == "marcas":
+        arch = raw.get("archetype")
+        if isinstance(arch, dict):
+            a = {}
+            for k, limit in (("name", 80), ("summary", 200), ("description", 2000)):
+                v = str(arch.get(k) or "").strip()[:limit]
+                if v:
+                    a[k] = v
+            if a:
+                out["archetype"] = a
+    return out
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# POST /api/media/{section}/meta   body: { folderPath, meta }
+# Guarda/actualiza la ficha (meta.json) de una carpeta: nombre, descripción,
+# colores y —solo en Marcas— arquetipo.
+# ══════════════════════════════════════════════════════════════════════════════
+@app.route(route="media/{section}/meta", methods=["POST", "OPTIONS"])
+def media_folder_meta(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_ok()
+    section = (req.route_params.get("section") or "").strip().lower()
+    if section not in MEDIA_SECTIONS:
+        return err("Sección de media desconocida", 400)
+
+    try:
+        body = req.get_json()
+    except Exception:
+        return err("Cuerpo JSON inválido", 400)
+
+    folder_path = _sanitize_folder_path(body.get("folderPath", ""))
+    if folder_path is None:
+        return err("Ruta de carpeta inválida", 400)
+    if not folder_path:
+        return err("folderPath requerido", 400)
+
+    _, auth_err = require_perms(req, section=section, item=_root_of(folder_path), cap="manageMedia")
+    if auth_err:
+        return auth_err
+
+    meta = _sanitize_media_meta(body.get("meta"), section)
+    try:
+        svc = get_blob_service()
+        blob_name = f"{_media_root(section)}/{folder_path}/meta.json"
+        bc = svc.get_blob_client(container=CONTAINER, blob=blob_name)
+        bc.upload_blob(json.dumps(meta, ensure_ascii=False).encode("utf-8"), overwrite=True,
+                       content_type="application/json")
+        return ok({"saved": True, "meta": meta})
+    except Exception as exc:
+        logging.error("media_folder_meta: %s", exc)
+        return err(str(exc), 500)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # POST /api/index/refresh (manual)
 # ══════════════════════════════════════════════════════════════════════════════

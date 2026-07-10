@@ -242,6 +242,7 @@ async function interactiveShot(name, path, action) {
 }
 await interactiveShot('modal-crear', '/marcas', async (p) => { await p.getByRole('button', { name: 'Nueva marca' }).click() })
 await interactiveShot('modal-subir', '/marcas/Grupo%20Ripcon/RIPCONCIV', async (p) => { await p.getByRole('button', { name: 'Subir archivos' }).click() })
+await interactiveShot('modal-ficha', '/marcas/Grupo%20Ripcon/RIPCONCIV', async (p) => { await p.getByRole('button', { name: 'Editar ficha' }).click() })
 await interactiveShot('accesos-viewer', '/accesos', async (p) => { await p.evaluate(() => window.scrollTo(0, document.body.scrollHeight)) })
 await interactiveShot('accesos-expand', '/accesos', async (p) => {
   await p.getByText('consultor@externo.com').click()

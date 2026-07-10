@@ -145,6 +145,9 @@ export const api = {
   // tamaño de la Function → 413; ahora TODO va directo al blob.)
   postMediaUploadPlan: (section, folderPath, files) =>
     apiFetch(`/api/media/${section}/plan`, { method: 'POST', body: JSON.stringify({ folderPath, files }) }),
+  // Ficha opcional de una carpeta (descripción, colores, arquetipo).
+  saveMediaMeta: (section, folderPath, meta) =>
+    apiFetch(`/api/media/${section}/meta`, { method: 'POST', body: JSON.stringify({ folderPath, meta }) }),
   createShare:      (projectId, week, expiryDays) =>
     apiFetch('/api/share/create', { method: 'POST', body: JSON.stringify({ projectId, week, expiryDays }) }),
   listShares:       ()           => apiFetch('/api/share/list'),

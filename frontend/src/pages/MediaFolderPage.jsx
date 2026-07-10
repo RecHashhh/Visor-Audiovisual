@@ -5,12 +5,13 @@
 // - Cualquier sección: imágenes como miniaturas y el resto como archivos, con
 //   subida directa para quien tenga la capacidad manageMedia.
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api } from '../utils/api'
 import { fetchThumb } from '../utils/thumbs'
 import { useAuthz, hasCap } from '../utils/authz'
 import { sectionById } from '../config/sections'
 import Modal from '../components/Modal'
+import FichaModal from '../components/FichaModal'
 import { useUploads } from '../utils/uploads'
 
 const FORMAT_LABEL = {
@@ -115,6 +116,17 @@ export default function MediaFolderPage({ sectionId }) {
   const [color, setColor] = useState('all')
   const [uploadOpen, setUploadOpen] = useState(false)
   const [newFolderOpen, setNewFolderOpen] = useState(false)
+  const [fichaOpen, setFichaOpen] = useState(false)
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  // Al crear una carpeta con "agregar ficha", se navega aquí con ?ficha=1.
+  useEffect(() => {
+    if (searchParams.get('ficha') === '1' && canUpload) {
+      setFichaOpen(true)
+      const next = new URLSearchParams(searchParams); next.delete('ficha')
+      setSearchParams(next, { replace: true })
+    }
+  }, [searchParams, canUpload]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function load() {
     setLoading(true); setError(null)
@@ -160,12 +172,12 @@ export default function MediaFolderPage({ sectionId }) {
   })
   const meta = data?.meta
   const hasFilters = format !== 'all' || background !== 'all' || color !== 'all'
-  // Paleta de la marca (solo en Marcas): de marca.json (meta.colors) o, si no
-  // hay, la paleta oficial por defecto para marcas conocidas (p. ej. RIPCONCIV).
+  // Colores de la ficha (meta.colors), en CUALQUIER sección. Como respaldo, la
+  // paleta por defecto de marcas conocidas (p. ej. RIPCONCIV) solo en Marcas.
   const brandColors = useMemo(() => {
-    if (!isMarcas) return []
     if (Array.isArray(meta?.colors) && meta.colors.length) return meta.colors
-    return DEFAULT_BRAND_COLORS[(meta?.name || folder).toLowerCase()] || []
+    if (isMarcas) return DEFAULT_BRAND_COLORS[(meta?.name || folder).toLowerCase()] || []
+    return []
   }, [isMarcas, meta, folder])
 
   const filtered = variants.filter(v =>
@@ -207,11 +219,16 @@ export default function MediaFolderPage({ sectionId }) {
         </div>
         {canUpload && (
           <div className="brand-upload">
+            <button className="btn btn-ghost" onClick={() => setFichaOpen(true)}>{meta ? 'Editar ficha' : 'Agregar ficha'}</button>
             <button className="btn btn-ghost" onClick={() => setNewFolderOpen(true)}>Nueva carpeta</button>
             <button className="btn btn-primary" onClick={() => setUploadOpen(true)}>Subir archivos</button>
           </div>
         )}
       </div>
+
+      {meta?.description && !meta?.archetype && (
+        <p className="media-folder-desc">{meta.description}</p>
+      )}
 
       {isMarcas && meta?.archetype && (
         <div className="brand-archetype">
@@ -339,6 +356,9 @@ export default function MediaFolderPage({ sectionId }) {
             folderPath={folderPath} folderName={folder} />
           <NewFolderModal open={newFolderOpen} onClose={() => setNewFolderOpen(false)}
             sectionId={sectionId} parentPath={folderPath} parentName={folder} onCreated={load} />
+          <FichaModal open={fichaOpen} onClose={() => setFichaOpen(false)}
+            sectionId={sectionId} folderPath={folderPath} folderName={meta?.name || folder}
+            initial={meta} onSaved={() => load()} />
         </>
       )}
     </>
@@ -348,20 +368,28 @@ export default function MediaFolderPage({ sectionId }) {
 // ── Modal de subida: arrastrar/soltar + subida directa navegador→blob ─────────
 // Crear una subcarpeta dentro de la carpeta actual (anidamiento a n niveles).
 function NewFolderModal({ open, onClose, sectionId, parentPath, parentName, onCreated }) {
+  const navigate = useNavigate()
+  const section = sectionById(sectionId)
   const [name, setName] = useState('')
+  const [addFicha, setAddFicha] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState(null)
 
-  useEffect(() => { if (open) { setName(''); setErr(null); setBusy(false) } }, [open])
+  useEffect(() => { if (open) { setName(''); setAddFicha(false); setErr(null); setBusy(false) } }, [open])
 
   async function create() {
     const clean = name.trim()
     if (!clean) { setErr('Escribe un nombre.'); return }
     setBusy(true); setErr(null)
     try {
-      await api.createMediaFolder(sectionId, clean, parentPath)
+      const res = await api.createMediaFolder(sectionId, clean, parentPath)
       onClose()
-      onCreated?.()
+      if (addFicha && res?.path) {
+        // Entra a la nueva carpeta con la ficha abierta.
+        navigate(`${section.path}/${res.path.split('/').map(encodeURIComponent).join('/')}?ficha=1`)
+      } else {
+        onCreated?.()
+      }
     } catch (e) {
       setErr(`No se pudo crear: ${e.message}`)
     } finally { setBusy(false) }
@@ -385,6 +413,10 @@ function NewFolderModal({ open, onClose, sectionId, parentPath, parentName, onCr
           onKeyDown={e => { if (e.key === 'Enter' && !busy && name.trim()) create() }} />
         <span className="field-help">Puedes anidar carpetas dentro de carpetas cuantas veces necesites.</span>
         {err && <span className="field-error">{err}</span>}
+      </label>
+      <label className="checkbox-inline">
+        <input type="checkbox" checked={addFicha} onChange={e => setAddFicha(e.target.checked)} />
+        <span>Agregar ficha (descripción, colores{sectionId === 'marcas' ? ', arquetipo' : ''}…) al crear</span>
       </label>
     </Modal>
   )
@@ -606,7 +638,7 @@ function BrandColors({ colors }) {
   }
   return (
     <section className="brand-colors">
-      <h2 className="logo-group-title">Colores de marca<span className="logo-group-count">{colors.length}</span></h2>
+      <h2 className="logo-group-title">Colores<span className="logo-group-count">{colors.length}</span></h2>
       <div className="brand-color-grid">
         {colors.map(c => (
           <button key={c.hex} type="button" className="brand-color-card" onClick={() => copy(c.hex)}
