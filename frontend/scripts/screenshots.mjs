@@ -70,38 +70,54 @@ async function mockApis(page) {
       return json({ email: 'agarzon@ripconciv.com', name: 'A. Garzón', allowed: true, role: 'admin', isAdmin: true, isManager: true, caps: ALL_CAPS, sections: '*', scopes: {}, restricted: false, bootstrap: false })
     }
     if (p === '/api/projects') return json(projects)
-    if (p === '/api/media/marcas') {
-      return json({ section: 'marcas', folders: [
-        { name: 'RIPCONCIV', fileCount: 30, lastModified: '2026-07-04T09:00:00Z' },
-        { name: 'GEOFORCE', fileCount: 4, lastModified: '2026-06-20T09:00:00Z' },
-      ] })
-    }
-    if (p.startsWith('/api/media/marcas/RIPCONCIV')) {
-      // Se añaden archivos no-imagen para previsualizar las miniaturas por tipo.
+
+    // ── Media con carpetas anidadas (API nueva: ?path= / ?tree=1) ──────────────
+    const RIPCONCIV_FILES = (() => {
       const extraFiles = [
-        // .ai cuyo nombre coincide (sufijo) con un PNG de thumbs → debe mostrar el logo
-        { name: 'RIPCONCIV_version_horizontal_positivo_azul.ai', path: '_media/marcas/RIPCONCIV/RIPCONCIV_version_horizontal_positivo_azul.ai', size: 1_400_000, type: 'ai', lastModified: '2026-07-05T09:00:00Z' },
-        { name: 'RIPCONCIV_version_simbolo_positivo_azul.ai', path: '_media/marcas/RIPCONCIV/RIPCONCIV_version_simbolo_positivo_azul.ai', size: 1_400_000, type: 'ai', lastModified: '2026-07-05T09:00:00Z' },
-        { name: 'Manrope.ttf', path: '_media/marcas/RIPCONCIV/Manrope.ttf', size: 167_160, type: 'font', lastModified: '2026-07-06T09:00:00Z' },
-        { name: 'Manrope.zip', path: '_media/marcas/RIPCONCIV/Manrope.zip', size: 853_542, type: 'zip', lastModified: '2026-07-06T09:00:00Z' },
-        { name: 'Manual-de-marca.pdf', path: '_media/marcas/RIPCONCIV/Manual-de-marca.pdf', size: 5_100_000, type: 'pdf', lastModified: '2026-07-03T09:00:00Z' },
+        { name: 'RIPCONCIV_version_horizontal_positivo_azul.ai', path: '_media/marcas/Grupo Ripcon/RIPCONCIV/RIPCONCIV_version_horizontal_positivo_azul.ai', size: 1_400_000, type: 'ai', lastModified: '2026-07-05T09:00:00Z' },
+        { name: 'RIPCONCIV_version_simbolo_positivo_azul.ai', path: '_media/marcas/Grupo Ripcon/RIPCONCIV/RIPCONCIV_version_simbolo_positivo_azul.ai', size: 1_400_000, type: 'ai', lastModified: '2026-07-05T09:00:00Z' },
+        { name: 'Manrope.ttf', path: '_media/marcas/Grupo Ripcon/RIPCONCIV/Manrope.ttf', size: 167_160, type: 'font', lastModified: '2026-07-06T09:00:00Z' },
+        { name: 'Manual-de-marca.pdf', path: '_media/marcas/Grupo Ripcon/RIPCONCIV/Manual-de-marca.pdf', size: 5_100_000, type: 'pdf', lastModified: '2026-07-03T09:00:00Z' },
       ]
-      return json({ section: 'marcas', folder: 'RIPCONCIV', files: [...brandFiles, ...extraFiles], meta: marcaMeta })
-    }
-    if (p.startsWith('/api/media/documentos/Firmas')) {
-      return json({ section: 'documentos', folder: 'Firmas', files: [
-        { name: 'Firma_ripconciv.html', path: '_media/documentos/Firmas/Firma_ripconciv.html', size: 1800, type: 'html', lastModified: '2026-07-06T10:00:00Z' },
-      ], meta: null })
-    }
-    const mFolders = p.match(/^\/api\/media\/([^/]+)$/)
-    if (mFolders) {
-      const sid = mFolders[1]
-      const byId = {
-        documentos: [{ name: 'Firmas', fileCount: 1, lastModified: '2026-07-06T10:00:00Z' }, { name: 'Papelería', fileCount: 8, lastModified: '2026-06-30T09:00:00Z' }, { name: 'Presentaciones', fileCount: 12, lastModified: '2026-07-02T09:00:00Z' }],
-        videos: [{ name: 'Institucional 2026', fileCount: 3, lastModified: '2026-06-10T09:00:00Z' }],
-        eventos: [], redes: [],
+      return [...brandFiles, ...extraFiles]
+    })()
+    const mediaMatch = p.match(/^\/api\/media\/([^/]+)$/)
+    if (mediaMatch) {
+      const sid = mediaMatch[1]
+      const path = url.searchParams.get('path') || ''
+      const tree = url.searchParams.get('tree')
+      if (sid === 'marcas') {
+        if (tree) return json({ section: 'marcas', path: '', folders: [
+          { path: 'Grupo Ripcon', name: 'Grupo Ripcon', depth: 0, fileCount: 0 },
+          { path: 'Grupo Ripcon/RIPCONCIV', name: 'RIPCONCIV', depth: 1, fileCount: 34 },
+          { path: 'Grupo Ripcon/GEOFORCE', name: 'GEOFORCE', depth: 1, fileCount: 4 },
+        ] })
+        if (path === '') return json({ section: 'marcas', path: '', folders: [
+          { path: 'Grupo Ripcon', name: 'Grupo Ripcon', fileCount: 0, lastModified: '2026-07-06T09:00:00Z' },
+        ], files: [], meta: null })
+        if (path === 'Grupo Ripcon') return json({ section: 'marcas', path, folders: [
+          { path: 'Grupo Ripcon/RIPCONCIV', name: 'RIPCONCIV', fileCount: 34, lastModified: '2026-07-06T09:00:00Z' },
+          { path: 'Grupo Ripcon/GEOFORCE', name: 'GEOFORCE', fileCount: 4, lastModified: '2026-06-20T09:00:00Z' },
+        ], files: [], meta: null })
+        if (path === 'Grupo Ripcon/RIPCONCIV') return json({ section: 'marcas', path, folders: [], files: RIPCONCIV_FILES, meta: marcaMeta })
+        return json({ section: 'marcas', path, folders: [], files: [], meta: null })
       }
-      return json({ section: sid, folders: byId[sid] || [] })
+      if (sid === 'documentos') {
+        if (tree) return json({ section: 'documentos', path: '', folders: [
+          { path: 'Firmas', name: 'Firmas', depth: 0, fileCount: 1 },
+          { path: 'Papelería', name: 'Papelería', depth: 0, fileCount: 8 },
+        ] })
+        if (path === 'Firmas') return json({ section: 'documentos', path, folders: [], files: [
+          { name: 'Firma_ripconciv.html', path: '_media/documentos/Firmas/Firma_ripconciv.html', size: 1800, type: 'html', lastModified: '2026-07-06T10:00:00Z' },
+        ], meta: null })
+        if (path === '') return json({ section: 'documentos', path: '', folders: [
+          { path: 'Firmas', name: 'Firmas', fileCount: 1, lastModified: '2026-07-06T10:00:00Z' },
+          { path: 'Papelería', name: 'Papelería', fileCount: 8, lastModified: '2026-06-30T09:00:00Z' },
+        ], files: [], meta: null })
+        return json({ section: 'documentos', path, folders: [], files: [], meta: null })
+      }
+      if (tree) return json({ section: sid, path: '', folders: [] })
+      return json({ section: sid, path, folders: [], files: [], meta: null })
     }
     if (p === '/api/sas/generate') {
       let bp = ''
@@ -152,8 +168,9 @@ const shots = [
   { name: 'home-light', path: '/', theme: 'light' },
   { name: 'proyectos-light', path: '/proyectos', theme: 'light' },
   { name: 'marcas-light', path: '/marcas', theme: 'light' },
-  { name: 'marca-ripconciv-light', path: '/marcas/RIPCONCIV', theme: 'light' },
-  { name: 'marca-ripconciv-dark', path: '/marcas/RIPCONCIV', theme: 'dark' },
+  { name: 'marcas-grupo', path: '/marcas/Grupo%20Ripcon', theme: 'light' },
+  { name: 'marca-ripconciv-light', path: '/marcas/Grupo%20Ripcon/RIPCONCIV', theme: 'light' },
+  { name: 'marca-ripconciv-dark', path: '/marcas/Grupo%20Ripcon/RIPCONCIV', theme: 'dark' },
   { name: 'documentos-light', path: '/documentos', theme: 'light' },
   { name: 'firmas-light', path: '/documentos/Firmas', theme: 'light' },
   { name: 'upload-light', path: '/upload', theme: 'light' },
@@ -174,7 +191,7 @@ for (const shot of shots) {
   }, shot.theme)
   await page.goto(`${BASE}${shot.path}`, { waitUntil: 'networkidle' })
   await page.waitForTimeout(900)
-  await page.screenshot({ path: `${OUT}/${shot.name}.png`, fullPage: /^(marca-|firmas)/.test(shot.name) })
+  await page.screenshot({ path: `${OUT}/${shot.name}.png`, fullPage: /^(marca-|firmas|marcas-grupo)/.test(shot.name) })
   console.log('shot:', shot.name)
   await ctx.close()
 }
@@ -224,7 +241,7 @@ async function interactiveShot(name, path, action) {
   await ctx.close()
 }
 await interactiveShot('modal-crear', '/marcas', async (p) => { await p.getByRole('button', { name: 'Nueva marca' }).click() })
-await interactiveShot('modal-subir', '/marcas/RIPCONCIV', async (p) => { await p.getByRole('button', { name: 'Subir archivos' }).click() })
+await interactiveShot('modal-subir', '/marcas/Grupo%20Ripcon/RIPCONCIV', async (p) => { await p.getByRole('button', { name: 'Subir archivos' }).click() })
 await interactiveShot('accesos-viewer', '/accesos', async (p) => { await p.evaluate(() => window.scrollTo(0, document.body.scrollHeight)) })
 await interactiveShot('accesos-expand', '/accesos', async (p) => {
   await p.getByText('consultor@externo.com').click()

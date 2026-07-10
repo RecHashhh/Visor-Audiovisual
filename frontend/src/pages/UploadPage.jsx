@@ -427,29 +427,32 @@ function LibraryUpload({ sections, me }) {
 
   const section = sections.find(s => s.id === sectionId)
 
-  function loadFolders(sid) {
+  // Árbol completo de la sección: cada carpeta, a cualquier profundidad.
+  // El scope de permisos se evalúa contra la carpeta raíz de cada ruta.
+  function loadFolders(sid, select) {
     setLoading(true)
-    api.listMediaFolders(sid)
+    api.getMediaTree(sid)
       .then(d => {
-        const fs = (d?.folders || []).filter(f => canItem(me, sid, f.name))
+        const fs = (d?.folders || []).filter(f => canItem(me, sid, f.path.split('/')[0]))
         setFolders(fs)
-        setFolder(fs[0]?.name || '')
+        setFolder(select && fs.some(f => f.path === select) ? select : (fs[0]?.path || ''))
       })
       .catch(() => setFolders([]))
       .finally(() => setLoading(false))
   }
   useEffect(() => { if (sectionId) loadFolders(sectionId) }, [sectionId]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Crea la carpeta DENTRO de la seleccionada (o en la raíz si no hay ninguna).
   async function createFolder() {
     const name = newFolder.trim()
     if (!name) return
     setBusy(true); setMsg(null)
     try {
-      await api.createMediaFolder(sectionId, name)
+      const res = await api.createMediaFolder(sectionId, name, folder)
       setNewFolder('')
-      setMsg({ ok: true, text: `Carpeta “${name}” creada.` })
-      await new Promise(r => setTimeout(r, 300))
-      loadFolders(sectionId); setFolder(name)
+      setMsg({ ok: true, text: `Carpeta “${res?.path || name}” creada.` })
+      await new Promise(r => setTimeout(r, 400))
+      loadFolders(sectionId, res?.path)
     } catch (e) { setMsg({ ok: false, text: `No se pudo crear: ${e.message}` }) }
     finally { setBusy(false) }
   }
@@ -459,7 +462,7 @@ function LibraryUpload({ sections, me }) {
   function upload(e) {
     const chosen = Array.from(e.target.files || [])
     if (!chosen.length || !folder) return
-    enqueue(chosen, { sectionId, sectionLabel: section?.label, folder })
+    enqueue(chosen, { sectionId, sectionLabel: section?.label, folderPath: folder })
     setMsg({
       ok: true,
       text: `Subida iniciada (${chosen.length} archivo${chosen.length !== 1 ? 's' : ''}). Puedes seguir navegando; el progreso aparece abajo a la derecha.`,
@@ -482,13 +485,18 @@ function LibraryUpload({ sections, me }) {
           <span className="field-select-label">Carpeta</span>
           <select className="select" value={folder} onChange={e => setFolder(e.target.value)} disabled={loading || folders.length === 0}>
             {folders.length === 0 && <option value="">{loading ? 'Cargando…' : 'Sin carpetas aún'}</option>}
-            {folders.map(f => <option key={f.name} value={f.name}>{f.name}</option>)}
+            {/* Sangría por nivel para que se lea el anidamiento */}
+            {folders.map(f => (
+              <option key={f.path} value={f.path}>{`${'    '.repeat(f.depth || 0)}${f.name}`}</option>
+            ))}
           </select>
         </label>
       </div>
 
       <div className="up-lib-create">
-        <input className="search-input" placeholder={`Nueva carpeta en ${section?.label || 'la sección'}`} value={newFolder}
+        <input className="search-input"
+          placeholder={folder ? `Nueva carpeta dentro de “${folder}”` : `Nueva carpeta en ${section?.label || 'la sección'}`}
+          value={newFolder}
           onChange={e => setNewFolder(e.target.value)} onKeyDown={e => e.key === 'Enter' && !busy && createFolder()} />
         <button className="btn btn-ghost" onClick={createFolder} disabled={busy || !newFolder.trim()}>Crear carpeta</button>
       </div>

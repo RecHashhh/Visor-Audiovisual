@@ -92,7 +92,17 @@ function fmtDate(iso) {
 
 export default function MediaFolderPage({ sectionId }) {
   const section = sectionById(sectionId)
-  const { folder } = useParams()
+  const params = useParams()
+  // Ruta anidada desde el comodín: "/marcas/Grupo%20Ripcon/RIPCONCIV" →
+  // ["Grupo Ripcon", "RIPCONCIV"]. Cada segmento viene codificado en la URL.
+  const segments = useMemo(
+    () => (params['*'] || '').split('/').filter(Boolean).map(s => {
+      try { return decodeURIComponent(s) } catch { return s }
+    }),
+    [params]
+  )
+  const folderPath = segments.join('/')
+  const folder = segments[segments.length - 1] || ''
   const { me } = useAuthz()
   const canUpload = hasCap(me, 'manageMedia')
   const isMarcas = sectionId === 'marcas'
@@ -104,23 +114,25 @@ export default function MediaFolderPage({ sectionId }) {
   const [background, setBackground] = useState('all')
   const [color, setColor] = useState('all')
   const [uploadOpen, setUploadOpen] = useState(false)
+  const [newFolderOpen, setNewFolderOpen] = useState(false)
 
   function load() {
     setLoading(true); setError(null)
-    api.getMediaFolder(sectionId, folder).then(setData).catch(e => setError(e.message)).finally(() => setLoading(false))
+    api.getMediaPath(sectionId, folderPath).then(setData).catch(e => setError(e.message)).finally(() => setLoading(false))
   }
-  useEffect(() => { load() }, [sectionId, folder]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load() }, [sectionId, folderPath]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // El gestor global avisa cuando termina una subida: si es de ESTA carpeta,
   // recargamos para que aparezcan los archivos recién subidos.
   useEffect(() => {
     function onUploadDone(e) {
-      if (e.detail?.sectionId === sectionId && e.detail?.folder === folder) load()
+      if (e.detail?.sectionId === sectionId && e.detail?.folderPath === folderPath) load()
     }
     window.addEventListener('ripcon:upload-done', onUploadDone)
     return () => window.removeEventListener('ripcon:upload-done', onUploadDone)
-  }, [sectionId, folder]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sectionId, folderPath]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  const subfolders = data?.folders || []
   const files = data?.files || []
   const variants = useMemo(() => (isMarcas ? files.map(parseVariant).filter(Boolean) : []), [files, isMarcas])
   const variantPaths = useMemo(() => new Set(variants.map(v => v.path)), [variants])
@@ -161,16 +173,29 @@ export default function MediaFolderPage({ sectionId }) {
     (background === 'all' || v.background === background) &&
     (color === 'all' || v.color === color))
 
+  // Migas de pan para cualquier profundidad: cada segmento enlaza a su nivel.
   const Crumb = () => (
     <div className="breadcrumb">
       <Link to={section.path}>{section.label}</Link>
-      <span className="sep">›</span>
-      <span className="current">{meta?.name || folder}</span>
+      {segments.map((seg, i) => {
+        const to = `${section.path}/${segments.slice(0, i + 1).map(encodeURIComponent).join('/')}`
+        const last = i === segments.length - 1
+        return (
+          <span key={to}>
+            <span className="sep">›</span>
+            {last ? <span className="current">{seg}</span> : <Link to={to}>{seg}</Link>}
+          </span>
+        )
+      })}
     </div>
   )
 
   if (loading) return <div className="loading"><div className="spinner" /><span>Cargando {folder}...</span></div>
   if (error) return <><Crumb /><div className="alert alert-error" role="alert">No se pudo cargar: {error}</div></>
+
+  const countBits = []
+  if (subfolders.length) countBits.push(`${subfolders.length} carpeta${subfolders.length !== 1 ? 's' : ''}`)
+  countBits.push(`${files.length} archivo${files.length !== 1 ? 's' : ''}`)
 
   return (
     <>
@@ -178,10 +203,13 @@ export default function MediaFolderPage({ sectionId }) {
       <div className="page-header brand-page-header">
         <div>
           <h1 className="page-title">{meta?.name || folder}</h1>
-          <p className="page-sub">{meta?.tagline || `${files.length} archivo${files.length !== 1 ? 's' : ''}`}</p>
+          <p className="page-sub">{meta?.tagline || countBits.join(' · ')}</p>
         </div>
         {canUpload && (
-          <button className="btn btn-primary" onClick={() => setUploadOpen(true)}>Subir archivos</button>
+          <div className="brand-upload">
+            <button className="btn btn-ghost" onClick={() => setNewFolderOpen(true)}>Nueva carpeta</button>
+            <button className="btn btn-primary" onClick={() => setUploadOpen(true)}>Subir archivos</button>
+          </div>
         )}
       </div>
 
@@ -199,11 +227,34 @@ export default function MediaFolderPage({ sectionId }) {
         </div>
       )}
 
-      {files.length === 0 && (
+      {subfolders.length > 0 && (
+        <section className="logo-group">
+          <h2 className="logo-group-title">Carpetas<span className="logo-group-count">{subfolders.length}</span></h2>
+          <div className="media-folder-grid">
+            {subfolders.map(f => (
+              <Link key={f.path} to={`${section.path}/${f.path.split('/').map(encodeURIComponent).join('/')}`} className="media-folder-card">
+                <div className="media-folder-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8A2 2 0 0 1 21 9.5V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
+                  </svg>
+                </div>
+                <div className="media-folder-name">{f.name}</div>
+                <div className="media-folder-meta">
+                  {f.fileCount} archivo{f.fileCount !== 1 ? 's' : ''}{f.lastModified ? ` · ${fmtDate(f.lastModified)}` : ''}
+                </div>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {files.length === 0 && subfolders.length === 0 && (
         <div className="empty">
-          <div className="empty-text">Esta carpeta aún no tiene archivos</div>
+          <div className="empty-text">Esta carpeta está vacía</div>
           <p className="access-empty-hint">
-            {canUpload ? 'Usa "Subir archivos" para agregar contenido.' : 'Todavía no se ha subido contenido aquí.'}
+            {canUpload
+              ? 'Usa "Subir archivos" para agregar contenido, o "Nueva carpeta" para organizarlo por dentro.'
+              : 'Todavía no se ha subido contenido aquí.'}
           </p>
         </div>
       )}
@@ -282,15 +333,64 @@ export default function MediaFolderPage({ sectionId }) {
       )}
 
       {canUpload && (
-        <UploadModal open={uploadOpen} onClose={() => setUploadOpen(false)}
-          sectionId={sectionId} sectionLabel={section?.label} folder={folder} />
+        <>
+          <UploadModal open={uploadOpen} onClose={() => setUploadOpen(false)}
+            sectionId={sectionId} sectionLabel={section?.label}
+            folderPath={folderPath} folderName={folder} />
+          <NewFolderModal open={newFolderOpen} onClose={() => setNewFolderOpen(false)}
+            sectionId={sectionId} parentPath={folderPath} parentName={folder} onCreated={load} />
+        </>
       )}
     </>
   )
 }
 
 // ── Modal de subida: arrastrar/soltar + subida directa navegador→blob ─────────
-function UploadModal({ open, onClose, sectionId, sectionLabel, folder }) {
+// Crear una subcarpeta dentro de la carpeta actual (anidamiento a n niveles).
+function NewFolderModal({ open, onClose, sectionId, parentPath, parentName, onCreated }) {
+  const [name, setName] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
+
+  useEffect(() => { if (open) { setName(''); setErr(null); setBusy(false) } }, [open])
+
+  async function create() {
+    const clean = name.trim()
+    if (!clean) { setErr('Escribe un nombre.'); return }
+    setBusy(true); setErr(null)
+    try {
+      await api.createMediaFolder(sectionId, clean, parentPath)
+      onClose()
+      onCreated?.()
+    } catch (e) {
+      setErr(`No se pudo crear: ${e.message}`)
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <Modal open={open} onClose={() => !busy && onClose()}
+      title="Nueva carpeta" subtitle={`Dentro de “${parentName}”`}
+      footer={<>
+        <button className="btn btn-ghost" onClick={onClose} disabled={busy}>Cancelar</button>
+        <button className="btn btn-primary" onClick={create} disabled={busy || !name.trim()}>
+          {busy ? 'Creando...' : 'Crear'}
+        </button>
+      </>}
+    >
+      <label className="field">
+        <span className="field-label">Nombre de la carpeta</span>
+        <input className="field-input" autoFocus value={name}
+          placeholder="p. ej. RIPCONCIV"
+          onChange={e => setName(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter' && !busy && name.trim()) create() }} />
+        <span className="field-help">Puedes anidar carpetas dentro de carpetas cuantas veces necesites.</span>
+        {err && <span className="field-error">{err}</span>}
+      </label>
+    </Modal>
+  )
+}
+
+function UploadModal({ open, onClose, sectionId, sectionLabel, folderPath, folderName }) {
   const { enqueue } = useUploads()
   const [items, setItems] = useState([])
   const [drag, setDrag] = useState(false)
@@ -309,13 +409,13 @@ function UploadModal({ open, onClose, sectionId, sectionLabel, folder }) {
   // cierres el modal o navegues a otra sección.
   function start() {
     if (!items.length) return
-    enqueue(items, { sectionId, sectionLabel, folder })
+    enqueue(items, { sectionId, sectionLabel, folderPath })
     onClose()
   }
 
   return (
     <Modal open={open} onClose={onClose} wide
-      title="Subir archivos" subtitle={`A la carpeta “${folder}”`}
+      title="Subir archivos" subtitle={`A la carpeta “${folderName}”`}
       footer={<>
         <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
         <button className="btn btn-primary" onClick={start} disabled={!items.length}>

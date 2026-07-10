@@ -129,16 +129,22 @@ export const api = {
   getThumbBlob:     (blobPath, width = 480, quality = 72, mode = '') =>
     apiFetchBlob(`/api/thumb?blobPath=${encodeURIComponent(blobPath)}&w=${width}&q=${quality}${mode ? `&mode=${mode}` : ''}`),
 
-  // ── Biblioteca de media (_media/<seccion>/<carpeta>) ──────────────────────
+  // ── Biblioteca de media (_media/<seccion>/<a>/<b>/…) — carpetas anidadas ──
+  // La ruta de carpeta viaja por query/body, no en el path, para no pelear con
+  // el encoding de "/" y los espacios.
+  getMediaPath:     (section, path = '') =>
+    apiFetch(`/api/media/${section}?path=${encodeURIComponent(path)}`),
+  // Todas las rutas de carpeta de la sección, en plano (para selectores).
+  getMediaTree:     (section) => apiFetch(`/api/media/${section}?tree=1`),
+  // Carpetas de la raíz de la sección.
   listMediaFolders: (section) => apiFetch(`/api/media/${section}`),
-  getMediaFolder:   (section, folder) => apiFetch(`/api/media/${section}/${encodeURIComponent(folder)}`),
-  createMediaFolder:(section, name) =>
-    apiFetch(`/api/media/${section}`, { method: 'POST', body: JSON.stringify({ name }) }),
+  createMediaFolder:(section, name, parentPath = '') =>
+    apiFetch(`/api/media/${section}`, { method: 'POST', body: JSON.stringify({ name, parentPath }) }),
   // Plan de subida directa navegador→blob para biblioteca (SAS por archivo).
   // (Antes había uploadMediaFiles multipart, pero chocaba con el límite de
   // tamaño de la Function → 413; ahora TODO va directo al blob.)
-  postMediaUploadPlan: (section, folder, files) =>
-    apiFetch(`/api/media/${section}/${encodeURIComponent(folder)}/plan`, { method: 'POST', body: JSON.stringify({ files }) }),
+  postMediaUploadPlan: (section, folderPath, files) =>
+    apiFetch(`/api/media/${section}/plan`, { method: 'POST', body: JSON.stringify({ folderPath, files }) }),
   createShare:      (projectId, week, expiryDays) =>
     apiFetch('/api/share/create', { method: 'POST', body: JSON.stringify({ projectId, week, expiryDays }) }),
   listShares:       ()           => apiFetch('/api/share/list'),

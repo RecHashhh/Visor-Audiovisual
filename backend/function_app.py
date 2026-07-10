@@ -1616,14 +1616,25 @@ def access_config_endpoint(req: func.HttpRequest) -> func.HttpResponse:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BIBLIOTECA DE MEDIA — carpetas por sección bajo _media/<seccion>/<carpeta>/
-# GET  /api/media/{section}                → lista carpetas (p. ej. marcas)
-# POST /api/media/{section}   (admin)      → crea carpeta {name}
-# GET  /api/media/{section}/{folder}       → archivos + metadata (marca.json)
-# POST /api/media/{section}/{folder}/upload (admin, multipart) → sube archivos
+# BIBLIOTECA DE MEDIA — carpetas ANIDADAS a n niveles
+#
+# Estructura: _media/<seccion>/<a>/<b>/<c>/archivo.ext
+# Las rutas de carpeta viajan por query/body (no por route params) para no pelear
+# con el encoding de "/" y los espacios dentro de las plantillas de ruta.
+#
+#   GET  /api/media/{section}?path=a/b   → subcarpetas + archivos de ESE nivel
+#   GET  /api/media/{section}?tree=1     → todas las rutas de carpeta (plano)
+#   POST /api/media/{section}            → crea carpeta {name, parentPath}
+#   POST /api/media/{section}/plan       → SAS de escritura {folderPath, files}
+#
+# Permisos: la sección la controla `sections`; el scope por ítem se evalúa contra
+# la carpeta RAÍZ (primer segmento), no cada subcarpeta — así la página Accesos
+# sigue siendo manejable aunque haya muchos niveles.
 # ══════════════════════════════════════════════════════════════════════════════
 MEDIA_SECTIONS = ("marcas", "documentos", "videos", "eventos", "redes", "politicas")
 _FOLDER_FORBIDDEN = set('/\\#?%*:|"<>')
+_MEDIA_META_FILES = ("marca.json", "meta.json")
+_MAX_FOLDER_DEPTH = 10
 
 def _media_root(section: str) -> str:
     return f"{MEDIA_PREFIX.strip('/')}/{section}"
@@ -1632,106 +1643,143 @@ def _sanitize_folder_name(raw: str) -> Optional[str]:
     name = " ".join((raw or "").split())
     if not name or len(name) > 60:
         return None
-    if name.startswith((".", "_")) or any(c in _FOLDER_FORBIDDEN for c in name):
+    if name in (".", "..") or name.startswith((".", "_")) or any(c in _FOLDER_FORBIDDEN for c in name):
         return None
     return name
+
+def _sanitize_folder_path(raw: Any) -> Optional[str]:
+    """'a/b/c' validado segmento a segmento. '' (la raíz) es válido.
+    Devuelve None si algún segmento es inválido (incluye '..' → sin path traversal)."""
+    text = unquote(str(raw or "")).strip().strip("/")
+    if not text:
+        return ""
+    segments = [s for s in text.split("/") if s.strip()]
+    if not segments or len(segments) > _MAX_FOLDER_DEPTH:
+        return None
+    clean = []
+    for seg in segments:
+        c = _sanitize_folder_name(seg)
+        if not c:
+            return None
+        clean.append(c)
+    return "/".join(clean)
+
+def _root_of(path: str) -> str:
+    """Carpeta raíz de una ruta anidada: 'Grupo Ripcon/RIPCONCIV' → 'Grupo Ripcon'."""
+    return path.split("/", 1)[0] if path else ""
 
 @app.route(route="media/{section}", methods=["GET", "POST", "OPTIONS"])
 def media_section(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
-
     section = (req.route_params.get("section") or "").strip().lower()
     if section not in MEDIA_SECTIONS:
         return err("Sección de media desconocida", 400)
-
     if req.method == "POST":
-        _, auth_err = require_perms(req, section=section, cap="manageMedia")
-        if auth_err:
-            return auth_err
-        try:
-            body = req.get_json()
-        except ValueError:
-            return err("Payload JSON inválido", 400)
-        name = _sanitize_folder_name(body.get("name", ""))
-        if not name:
-            return err("Nombre inválido: usa hasta 60 caracteres sin / \\ # ? % * : | \" < >", 400)
-        try:
-            svc = get_blob_service()
-            cc = svc.get_container_client(CONTAINER)
-            prefix = f"{_media_root(section)}/{name}/"
-            for _ in cc.list_blobs(name_starts_with=prefix):
-                return err("Ya existe una carpeta con ese nombre", 409)
-            bc = svc.get_blob_client(container=CONTAINER, blob=f"{prefix}.keep")
-            bc.upload_blob(b"", overwrite=True)
-            return ok({"created": True, "name": name})
-        except Exception as exc:
-            logging.error("media_create_folder: %s", exc)
-            return err(str(exc), 500)
+        return _media_create_folder(req, section)
+    return _media_list(req, section)
 
-    perms, auth_err = require_perms(req, section=section)
+
+def _media_create_folder(req: func.HttpRequest, section: str) -> func.HttpResponse:
+    try:
+        body = req.get_json()
+    except ValueError:
+        return err("Payload JSON inválido", 400)
+
+    parent = _sanitize_folder_path(body.get("parentPath", ""))
+    if parent is None:
+        return err("Ruta de carpeta inválida", 400)
+    name = _sanitize_folder_name(body.get("name", ""))
+    if not name:
+        return err('Nombre inválido: usa hasta 60 caracteres sin / \\ # ? % * : | " < >', 400)
+    if parent and len(parent.split("/")) >= _MAX_FOLDER_DEPTH:
+        return err(f"Máximo {_MAX_FOLDER_DEPTH} niveles de carpetas", 400)
+
+    # En la raíz basta el permiso de sección; dentro, el scope mira la carpeta raíz.
+    _, auth_err = require_perms(req, section=section,
+                                item=_root_of(parent) if parent else None, cap="manageMedia")
     if auth_err:
         return auth_err
+
+    rel = f"{parent}/{name}" if parent else name
     try:
         svc = get_blob_service()
         cc = svc.get_container_client(CONTAINER)
-        prefix = f"{_media_root(section)}/"
-        folder_map: Dict[str, Dict[str, Any]] = {}
-        for blob in cc.list_blobs(name_starts_with=prefix):
-            remainder = blob.name[len(prefix):]
-            if "/" not in remainder:
-                continue
-            folder = remainder.split("/", 1)[0]
-            leaf = remainder.split("/")[-1]
-            if folder not in folder_map:
-                folder_map[folder] = {"name": folder, "fileCount": 0, "lastModified": None}
-            entry = folder_map[folder]
-            if leaf and not is_marker_file(leaf) and leaf != "marca.json":
+        prefix = f"{_media_root(section)}/{rel}/"
+        for _ in cc.list_blobs(name_starts_with=prefix):
+            return err("Ya existe una carpeta con ese nombre", 409)
+        bc = svc.get_blob_client(container=CONTAINER, blob=f"{prefix}.keep")
+        bc.upload_blob(b"", overwrite=True)
+        return ok({"created": True, "name": name, "path": rel})
+    except Exception as exc:
+        logging.error("media_create_folder: %s", exc)
+        return err(str(exc), 500)
+
+
+def _media_list(req: func.HttpRequest, section: str) -> func.HttpResponse:
+    path = _sanitize_folder_path(req.params.get("path", ""))
+    if path is None:
+        return err("Ruta de carpeta inválida", 400)
+    want_tree = str(req.params.get("tree", "")).strip().lower() in ("1", "true", "yes")
+
+    perms, auth_err = require_perms(req, section=section, item=_root_of(path) or None)
+    if auth_err:
+        return auth_err
+
+    try:
+        svc = get_blob_service()
+        cc = svc.get_container_client(CONTAINER)
+        root = _media_root(section)
+        prefix = f"{root}/{path}/" if path else f"{root}/"
+
+        def bump(entry: dict, leaf: str, blob) -> None:
+            if leaf and not is_marker_file(leaf) and leaf not in _MEDIA_META_FILES:
                 entry["fileCount"] += 1
                 lm = blob.last_modified
                 if lm and (entry["lastModified"] is None or lm > entry["lastModified"]):
                     entry["lastModified"] = lm
-        folders = [
-            {**f, "lastModified": f["lastModified"].isoformat() if f["lastModified"] else None}
-            for f in sorted(folder_map.values(), key=lambda x: x["name"].lower())
-        ]
-        folders = _filter_media_folders_by_perms(folders, perms, section)
-        return ok({"section": section, "folders": folders})
-    except Exception as exc:
-        logging.error("media_list_folders: %s", exc)
-        return err(str(exc), 500)
 
+        def iso(entry: dict) -> dict:
+            return {**entry, "lastModified": entry["lastModified"].isoformat() if entry["lastModified"] else None}
 
-@app.route(route="media/{section}/{folder}", methods=["GET", "OPTIONS"])
-def media_folder(req: func.HttpRequest) -> func.HttpResponse:
-    if req.method == "OPTIONS":
-        return options_ok()
+        # ── Árbol plano: todas las rutas de carpeta bajo `path` (para selectores) ──
+        if want_tree:
+            nodes: Dict[str, Dict[str, Any]] = {}
+            for blob in cc.list_blobs(name_starts_with=prefix):
+                segments = blob.name[len(prefix):].split("/")
+                leaf = segments[-1]
+                for depth in range(1, len(segments)):
+                    rel = "/".join(segments[:depth])
+                    full = f"{path}/{rel}" if path else rel
+                    node = nodes.setdefault(full, {"path": full, "name": segments[depth - 1],
+                                                   "depth": depth - 1, "fileCount": 0, "lastModified": None})
+                    bump(node, leaf, blob)
+            out = [iso(n) for n in sorted(nodes.values(), key=lambda x: x["path"].lower())]
+            out = [f for f in out if perms_allow_item(perms, section, _root_of(f["path"]))]
+            return ok({"section": section, "path": path, "folders": out})
 
-    section = (req.route_params.get("section") or "").strip().lower()
-    if section not in MEDIA_SECTIONS:
-        return err("Sección de media desconocida", 400)
-    folder = unquote(req.route_params.get("folder") or "").strip()
-    if not folder:
-        return err("Carpeta requerida", 400)
-
-    _, auth_err = require_perms(req, section=section, item=folder)
-    if auth_err:
-        return auth_err
-
-    try:
-        svc = get_blob_service()
-        cc = svc.get_container_client(CONTAINER)
-        prefix = f"{_media_root(section)}/{folder}/"
-        files = []
+        # ── Un nivel: subcarpetas + archivos directos + metadata de la carpeta ──
+        folders: Dict[str, Dict[str, Any]] = {}
+        files: list = []
         meta = None
         found_any = False
+
         for blob in cc.list_blobs(name_starts_with=prefix):
             found_any = True
             remainder = blob.name[len(prefix):]
-            leaf = remainder.split("/")[-1]
-            if not leaf or is_marker_file(leaf):
+            if not remainder:
                 continue
-            if remainder == "marca.json":
+            if "/" in remainder:
+                sub = remainder.split("/", 1)[0]
+                node = folders.setdefault(sub, {"name": sub, "path": f"{path}/{sub}" if path else sub,
+                                                "fileCount": 0, "lastModified": None})
+                bump(node, remainder.split("/")[-1], blob)
+                continue
+
+            leaf = remainder
+            if is_marker_file(leaf):
+                continue
+            if leaf in _MEDIA_META_FILES:
                 try:
                     raw = cc.get_blob_client(blob).download_blob().readall()
                     if len(raw) <= 32_768:
@@ -1739,78 +1787,34 @@ def media_folder(req: func.HttpRequest) -> func.HttpResponse:
                         if isinstance(parsed, dict):
                             meta = parsed
                 except Exception as exc:
-                    logging.warning("media_folder marca.json inválido (%s): %s", folder, exc)
+                    logging.warning("media meta inválido (%s): %s", blob.name, exc)
                 continue
             files.append({
-                "name": remainder,
-                "path": blob.name,
-                "size": blob.size,
-                "type": type_of(leaf),
+                "name": leaf, "path": blob.name, "size": blob.size, "type": type_of(leaf),
                 "lastModified": blob.last_modified.isoformat() if blob.last_modified else None,
             })
-        if not found_any:
+
+        if path and not found_any:
             return err("Carpeta no encontrada", 404)
+
+        folder_list = [iso(f) for f in sorted(folders.values(), key=lambda x: x["name"].lower())]
+        # El scope por ítem solo aplica a las carpetas raíz de la sección.
+        if not path:
+            folder_list = _filter_media_folders_by_perms(folder_list, perms, section)
         files.sort(key=lambda f: f["name"].lower())
-        return ok({"section": section, "folder": folder, "files": files, "meta": meta})
+        return ok({"section": section, "path": path, "folders": folder_list, "files": files, "meta": meta})
     except Exception as exc:
-        logging.error("media_folder: %s", exc)
-        return err(str(exc), 500)
-
-
-@app.route(route="media/{section}/{folder}/upload", methods=["POST", "OPTIONS"])
-def media_upload(req: func.HttpRequest) -> func.HttpResponse:
-    if req.method == "OPTIONS":
-        return options_ok()
-
-    section = (req.route_params.get("section") or "").strip().lower()
-    if section not in MEDIA_SECTIONS:
-        return err("Sección de media desconocida", 400)
-    folder = unquote(req.route_params.get("folder") or "").strip()
-    if not folder:
-        return err("Carpeta requerida", 400)
-
-    _, auth_err = require_perms(req, section=section, item=folder, cap="manageMedia")
-    if auth_err:
-        return auth_err
-
-    try:
-        incoming = req.files.getlist("files") if req.files else []
-    except Exception:
-        incoming = []
-    if not incoming:
-        return err("Adjunta al menos un archivo en el campo 'files'", 400)
-
-    import mimetypes
-    uploaded, failed = [], []
-    try:
-        svc = get_blob_service()
-        prefix = f"{_media_root(section)}/{folder}/"
-        for f in incoming:
-            fname = os.path.basename(getattr(f, "filename", "") or "").strip()
-            if not fname or fname.startswith("."):
-                failed.append({"name": fname or "(sin nombre)", "error": "Nombre inválido"})
-                continue
-            try:
-                data = f.stream.read()
-                ctype = getattr(f, "content_type", None) or mimetypes.guess_type(fname)[0] or "application/octet-stream"
-                bc = svc.get_blob_client(container=CONTAINER, blob=f"{prefix}{fname}")
-                bc.upload_blob(data, overwrite=True, content_type=ctype)
-                uploaded.append(fname)
-            except Exception as exc:
-                failed.append({"name": fname, "error": str(exc)})
-        return ok({"uploaded": uploaded, "failed": failed})
-    except Exception as exc:
-        logging.error("media_upload: %s", exc)
+        logging.error("media_list: %s", exc)
         return err(str(exc), 500)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# POST /api/media/{section}/{folder}/plan
+# POST /api/media/{section}/plan   body: { folderPath, files:[{name,size}] }
 # Devuelve SAS de escritura por archivo para subir DIRECTO navegador→blob (sin
-# pasar por la Function), así se evitan los límites de tamaño del multipart y
-# los videos/artes de varios GB no dependen del timeout del servidor.
+# pasar por la Function), evitando los límites de tamaño del multipart.
+# folderPath admite anidamiento: "Grupo Ripcon/RIPCONCIV".
 # ══════════════════════════════════════════════════════════════════════════════
-@app.route(route="media/{section}/{folder}/plan", methods=["POST", "OPTIONS"])
+@app.route(route="media/{section}/plan", methods=["POST", "OPTIONS"])
 def media_upload_plan(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
@@ -1818,18 +1822,22 @@ def media_upload_plan(req: func.HttpRequest) -> func.HttpResponse:
     section = (req.route_params.get("section") or "").strip().lower()
     if section not in MEDIA_SECTIONS:
         return err("Sección de media desconocida", 400)
-    folder = unquote(req.route_params.get("folder") or "").strip()
-    if not folder:
-        return err("Carpeta requerida", 400)
-
-    _, auth_err = require_perms(req, section=section, item=folder, cap="manageMedia")
-    if auth_err:
-        return auth_err
 
     try:
         body = req.get_json()
     except Exception:
         return err("Cuerpo JSON inválido", 400)
+
+    folder_path = _sanitize_folder_path(body.get("folderPath", ""))
+    if folder_path is None:
+        return err("Ruta de carpeta inválida", 400)
+    if not folder_path:
+        return err("folderPath requerido: no se sube a la raíz de la sección", 400)
+
+    _, auth_err = require_perms(req, section=section, item=_root_of(folder_path), cap="manageMedia")
+    if auth_err:
+        return auth_err
+
     files_in = body.get("files") or []
     if not isinstance(files_in, list) or not files_in:
         return err("files: lista de archivos requerida", 400)
@@ -1837,7 +1845,7 @@ def media_upload_plan(req: func.HttpRequest) -> func.HttpResponse:
         return err("Máximo 500 archivos por tanda", 400)
 
     import mimetypes
-    prefix = f"{_media_root(section)}/{folder}/"
+    prefix = f"{_media_root(section)}/{folder_path}/"
     planned = []
     for f in files_in:
         if not isinstance(f, dict):
@@ -1854,7 +1862,7 @@ def media_upload_plan(req: func.HttpRequest) -> func.HttpResponse:
             "contentType": ctype,
             "sasUrl": make_sas_url_write(blob_path, expiry_minutes=360),
         })
-    return ok({"section": section, "folder": folder,
+    return ok({"section": section, "folderPath": folder_path,
                "total": len(planned), "files": planned})
 
 

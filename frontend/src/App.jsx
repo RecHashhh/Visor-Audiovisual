@@ -108,7 +108,8 @@ export default function App() {
               <Route path={s.path} element={
                 <RequireSection section={s.id}><MediaSectionPage sectionId={s.id} /></RequireSection>
               } />
-              <Route path={`${s.path}/:folder`} element={
+              {/* Comodín: soporta carpetas anidadas a n niveles (/marcas/a/b/c) */}
+              <Route path={`${s.path}/*`} element={
                 <RequireSection section={s.id}><MediaFolderPage sectionId={s.id} /></RequireSection>
               } />
             </Fragment>

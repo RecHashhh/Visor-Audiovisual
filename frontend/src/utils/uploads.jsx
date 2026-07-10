@@ -21,10 +21,10 @@ export function UploadsProvider({ children }) {
 
   const enqueue = useCallback((files, ctx) => {
     const arr = Array.from(files || [])
-    if (!arr.length || !ctx?.sectionId || !ctx?.folder) return
+    if (!arr.length || !ctx?.sectionId || !ctx?.folderPath) return
     const batch = arr.map(f => ({
       id: ++_seq, file: f, name: f.name, size: f.size,
-      sectionId: ctx.sectionId, sectionLabel: ctx.sectionLabel || ctx.sectionId, folder: ctx.folder,
+      sectionId: ctx.sectionId, sectionLabel: ctx.sectionLabel || ctx.sectionId, folderPath: ctx.folderPath,
       pct: 0, status: 'queued', error: null,
     }))
     setTasks(prev => [...batch, ...prev])
@@ -32,7 +32,7 @@ export function UploadsProvider({ children }) {
     ;(async () => {
       let planned = []
       try {
-        const plan = await api.postMediaUploadPlan(ctx.sectionId, ctx.folder, arr.map(f => ({ name: f.name, size: f.size })))
+        const plan = await api.postMediaUploadPlan(ctx.sectionId, ctx.folderPath, arr.map(f => ({ name: f.name, size: f.size })))
         planned = plan.files || []
       } catch (e) {
         batch.forEach(t => patch(t.id, { status: 'error', error: e.message }))
@@ -54,7 +54,7 @@ export function UploadsProvider({ children }) {
           })
           patch(t.id, { status: 'done', pct: 100 })
           // Avisar a la página de esa carpeta para que recargue su contenido.
-          window.dispatchEvent(new CustomEvent('ripcon:upload-done', { detail: { sectionId: t.sectionId, folder: t.folder } }))
+          window.dispatchEvent(new CustomEvent('ripcon:upload-done', { detail: { sectionId: t.sectionId, folderPath: t.folderPath } }))
         } catch (e) {
           patch(t.id, { status: 'error', error: e.message })
         }
@@ -131,7 +131,7 @@ export function UploadTray() {
               {(t.status === 'uploading' || t.status === 'queued' || t.status === 'done') && (
                 <div className="uptray-bar"><div className="uptray-fill" style={{ transform: `scaleX(${t.pct / 100})` }} /></div>
               )}
-              <div className="uptray-item-dest">{t.status === 'error' ? (t.error || 'Error') : `${t.sectionLabel} · ${t.folder} · ${fmtSize(t.size)}`}</div>
+              <div className="uptray-item-dest">{t.status === 'error' ? (t.error || 'Error') : `${t.sectionLabel} · ${t.folderPath} · ${fmtSize(t.size)}`}</div>
             </div>
           ))}
         </div>
