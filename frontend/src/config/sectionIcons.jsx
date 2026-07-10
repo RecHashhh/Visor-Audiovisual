@@ -40,4 +40,10 @@ export const SECTION_ICONS = {
       <path d="M8.1 10.8 15.9 7.2M8.1 13.2l7.8 3.6" />
     </svg>
   ),
+  politicas: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 3l7 3v5.5c0 4.3-2.9 7.9-7 9.5-4.1-1.6-7-5.2-7-9.5V6l7-3z" />
+      <path d="M9.2 12.2l2 2 3.6-3.9" />
+    </svg>
+  ),
 }

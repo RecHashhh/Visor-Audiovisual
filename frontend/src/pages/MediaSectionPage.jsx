@@ -28,6 +28,7 @@ const NEW_FIELDS = {
   documentos: { btn: 'Nueva carpeta', title: 'Nueva carpeta', label: 'Nombre de la carpeta', placeholder: 'p. ej. Plantillas de correo',     help: 'Agrupa documentos o plantillas.' },
   videos:     { btn: 'Nueva carpeta', title: 'Nueva carpeta', label: 'Nombre de la carpeta', placeholder: 'p. ej. Institucional 2026',       help: 'Agrupa videos por tema o campaña.' },
   redes:      { btn: 'Nueva carpeta', title: 'Nueva carpeta', label: 'Nombre de la carpeta', placeholder: 'p. ej. Campaña julio',            help: 'Agrupa piezas para redes sociales.' },
+  politicas:  { btn: 'Nueva carpeta', title: 'Nueva carpeta', label: 'Nombre de la carpeta', placeholder: 'p. ej. Seguridad y salud',       help: 'Agrupa políticas, normativas y reglamentos.' },
 }
 const DEFAULT_FIELDS = { btn: 'Nueva carpeta', title: 'Nueva carpeta', label: 'Nombre de la carpeta', placeholder: 'Nombre de la carpeta', help: '' }
 

@@ -54,6 +54,14 @@ export const SECTIONS = [
     status: 'active',
     description: 'Contenido preparado y publicado para Instagram, LinkedIn y más.',
   },
+  {
+    id: 'politicas',
+    label: 'Politicas',
+    path: '/politicas',
+    kind: 'media',
+    status: 'active',
+    description: 'Políticas, normativas y reglamentos internos de la empresa.',
+  },
 ]
 
 export const MEDIA_SECTIONS = SECTIONS.filter(s => s.kind === 'media')

@@ -55,6 +55,17 @@ async function getToken() {
   }
 }
 
+// El backend responde {"error": "..."} en los fallos. Sin esto el usuario solo
+// veía "→ 500" y se perdía la causa real (p. ej. "Faltan credenciales Graph").
+async function throwApiError(res, path) {
+  let detail = ''
+  try {
+    const body = await res.json()
+    detail = body?.error || ''
+  } catch { /* respuesta sin JSON */ }
+  throw new Error(detail ? `${detail} (${res.status})` : `API ${path} → ${res.status}`)
+}
+
 async function apiFetch(path, options = {}, cacheKey = null) {
   // Check cache for GET requests
   if (!options.method || options.method === 'GET') {
@@ -71,7 +82,7 @@ async function apiFetch(path, options = {}, cacheKey = null) {
   const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) }
   headers['X-Access-Token'] = token
   const res = await fetch(path, { ...options, headers })
-  if (!res.ok) throw new Error(`API ${path} → ${res.status}`)
+  if (!res.ok) await throwApiError(res, path)
   const data = await res.json()
 
   // Cache GET responses

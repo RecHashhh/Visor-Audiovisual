@@ -567,7 +567,7 @@ def build_thumbnail_bytes(raw_bytes: bytes, max_width: int = 480, quality: int =
 
 # La sección de material audiovisual de obra se llama "proyectos" (id = etiqueta,
 # coherente). "material" es un alias histórico que se normaliza a "proyectos".
-KNOWN_SECTIONS = ["proyectos", "marcas", "documentos", "videos", "eventos", "redes"]
+KNOWN_SECTIONS = ["proyectos", "marcas", "documentos", "videos", "eventos", "redes", "politicas"]
 SECTION_ALIASES = {"material": "proyectos"}
 ROLES = ("admin", "operador", "viewer")
 
@@ -1622,7 +1622,7 @@ def access_config_endpoint(req: func.HttpRequest) -> func.HttpResponse:
 # GET  /api/media/{section}/{folder}       → archivos + metadata (marca.json)
 # POST /api/media/{section}/{folder}/upload (admin, multipart) → sube archivos
 # ══════════════════════════════════════════════════════════════════════════════
-MEDIA_SECTIONS = ("marcas", "documentos", "videos", "eventos", "redes")
+MEDIA_SECTIONS = ("marcas", "documentos", "videos", "eventos", "redes", "politicas")
 _FOLDER_FORBIDDEN = set('/\\#?%*:|"<>')
 
 def _media_root(section: str) -> str:
