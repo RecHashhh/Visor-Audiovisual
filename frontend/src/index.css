@@ -2088,6 +2088,39 @@ code { font-family: var(--font-mono); background: var(--bg3); padding: 2px 6px; 
 .html-frame-wrap { padding: 18px; background: #ffffff; overflow: auto; }
 .html-frame { width: 100%; min-height: 120px; border: 0; background: #ffffff; display: block; }
 
+/* ── Bandeja de subidas en segundo plano (abajo a la derecha) ─────────────── */
+.uptray {
+  position: fixed; right: 20px; bottom: 20px; z-index: 90;
+  width: 340px; max-width: calc(100vw - 32px);
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: 12px; box-shadow: var(--shadow-lg); overflow: hidden;
+}
+.uptray-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; cursor: pointer; border-bottom: 1px solid var(--border); }
+.uptray-title { display: inline-flex; align-items: center; gap: 8px; font-size: 0.85rem; font-weight: 600; color: var(--text); min-width: 0; }
+.uptray-spin { width: 14px; height: 14px; flex: none; border: 2px solid var(--border-hi); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; }
+.uptray-check { color: var(--green); font-weight: 700; }
+.uptray-head-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+.uptray-clear, .uptray-toggle { background: none; border: 0; color: var(--text-dim); cursor: pointer; font-size: 0.78rem; padding: 2px 4px; }
+.uptray-clear:hover, .uptray-toggle:hover { color: var(--text); }
+.uptray-body { max-height: 260px; overflow-y: auto; padding: 8px 12px 12px; display: grid; gap: 10px; }
+.uptray-item { display: grid; gap: 5px; }
+.uptray-item-top { display: flex; align-items: center; gap: 8px; }
+.uptray-item-name { flex: 1; min-width: 0; font-size: 0.8rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uptray-item-meta { flex: none; font-size: 0.74rem; color: var(--text-dim); font-family: var(--font-mono); }
+.uptray-item-x { border: 0; background: none; color: var(--text-dim); cursor: pointer; font-size: 1rem; line-height: 1; }
+.uptray-bar { height: 5px; background: var(--bg3); border-radius: 3px; overflow: hidden; }
+/* Se anima con transform (no width): la barra se actualiza cada 1% durante
+   subidas de varios GB y width provocaría recálculo de layout constante. */
+.uptray-fill {
+  height: 100%; width: 100%; transform-origin: left; transform: scaleX(0);
+  background: linear-gradient(90deg, var(--accent), var(--accent-dim));
+  border-radius: 3px; transition: transform 0.15s ease;
+}
+.uptray-item.done .uptray-fill { background: var(--green); }
+.uptray-item.error .uptray-item-meta,
+.uptray-item.error .uptray-item-dest { color: var(--red); }
+.uptray-item-dest { font-size: 0.7rem; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* ── Modal genérico ─────────────────────────────────────── */
 .modal-overlay { position: fixed; inset: 0; z-index: var(--z-lightbox); background: rgba(10, 12, 18, 0.55); display: flex; align-items: center; justify-content: center; padding: 5vh 20px; backdrop-filter: blur(2px); }
 .modal { background: var(--bg2); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow-lg); width: 100%; max-width: 480px; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; }
@@ -2120,10 +2153,6 @@ code { font-family: var(--font-mono); background: var(--bg3); padding: 2px 6px; 
 .upload-item-name { flex: 1; min-width: 0; font-size: 0.86rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .upload-item-size { font-size: 0.76rem; color: var(--text-dim); font-family: var(--font-mono); flex: none; }
 .upload-item-x { border: 0; background: none; color: var(--text-dim); cursor: pointer; font-size: 1.15rem; line-height: 1; }
-.upload-bar { height: 6px; background: var(--bg3); border-radius: 4px; overflow: hidden; }
-.upload-bar-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-dim)); border-radius: 4px; transition: width 0.15s ease; }
-.upload-item.done .upload-bar-fill { background: var(--green); }
-.upload-item.error .upload-item-size { color: var(--red); }
 
 /* Paleta de colores de la marca (solo en Marcas) */
 .brand-colors { margin: 8px 0 28px; }

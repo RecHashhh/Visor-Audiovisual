@@ -129,7 +129,7 @@ export function UploadTray() {
                 )}
               </div>
               {(t.status === 'uploading' || t.status === 'queued' || t.status === 'done') && (
-                <div className="uptray-bar"><div className="uptray-fill" style={{ width: `${t.pct}%` }} /></div>
+                <div className="uptray-bar"><div className="uptray-fill" style={{ transform: `scaleX(${t.pct / 100})` }} /></div>
               )}
               <div className="uptray-item-dest">{t.status === 'error' ? (t.error || 'Error') : `${t.sectionLabel} · ${t.folder} · ${fmtSize(t.size)}`}</div>
             </div>

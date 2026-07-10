@@ -11,7 +11,7 @@ import { fetchThumb } from '../utils/thumbs'
 import { useAuthz, hasCap } from '../utils/authz'
 import { sectionById } from '../config/sections'
 import Modal from '../components/Modal'
-import { uploadFileToBlob } from '../utils/blobUpload'
+import { useUploads } from '../utils/uploads'
 
 const FORMAT_LABEL = {
   centrada: 'Centrada', horizontal: 'Horizontal', simbolo: 'Símbolo',
@@ -110,6 +110,16 @@ export default function MediaFolderPage({ sectionId }) {
     api.getMediaFolder(sectionId, folder).then(setData).catch(e => setError(e.message)).finally(() => setLoading(false))
   }
   useEffect(() => { load() }, [sectionId, folder]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // El gestor global avisa cuando termina una subida: si es de ESTA carpeta,
+  // recargamos para que aparezcan los archivos recién subidos.
+  useEffect(() => {
+    function onUploadDone(e) {
+      if (e.detail?.sectionId === sectionId && e.detail?.folder === folder) load()
+    }
+    window.addEventListener('ripcon:upload-done', onUploadDone)
+    return () => window.removeEventListener('ripcon:upload-done', onUploadDone)
+  }, [sectionId, folder]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const files = data?.files || []
   const variants = useMemo(() => (isMarcas ? files.map(parseVariant).filter(Boolean) : []), [files, isMarcas])
@@ -273,72 +283,43 @@ export default function MediaFolderPage({ sectionId }) {
 
       {canUpload && (
         <UploadModal open={uploadOpen} onClose={() => setUploadOpen(false)}
-          sectionId={sectionId} folder={folder} onDone={load} />
+          sectionId={sectionId} sectionLabel={section?.label} folder={folder} />
       )}
     </>
   )
 }
 
 // ── Modal de subida: arrastrar/soltar + subida directa navegador→blob ─────────
-function UploadModal({ open, onClose, sectionId, folder, onDone }) {
+function UploadModal({ open, onClose, sectionId, sectionLabel, folder }) {
+  const { enqueue } = useUploads()
   const [items, setItems] = useState([])
-  const [busy, setBusy] = useState(false)
   const [drag, setDrag] = useState(false)
   const inputRef = useRef(null)
 
-  useEffect(() => { if (open) { setItems([]); setBusy(false); setDrag(false) } }, [open])
+  useEffect(() => { if (open) { setItems([]); setDrag(false) } }, [open])
 
   function addFiles(fileList) {
     const arr = Array.from(fileList || [])
     if (!arr.length) return
-    setItems(prev => [...prev, ...arr.map(f => ({ file: f, name: f.name, size: f.size, pct: 0, status: 'pending', error: null }))])
+    setItems(prev => [...prev, ...arr])
   }
   function removeAt(i) { setItems(prev => prev.filter((_, idx) => idx !== i)) }
-  function update(i, patch) { setItems(prev => prev.map((it, idx) => idx === i ? { ...it, ...patch } : it)) }
 
-  async function start() {
-    const idxs = items.map((_, i) => i).filter(i => items[i].status !== 'done')
-    if (!idxs.length) return
-    setBusy(true)
-    try {
-      const payload = idxs.map(i => ({ name: items[i].name, size: items[i].size }))
-      const plan = await api.postMediaUploadPlan(sectionId, folder, payload)
-      const planned = plan.files || []
-      let anyOk = false
-      for (let k = 0; k < idxs.length; k++) {
-        const i = idxs[k]
-        const p = planned[k]
-        if (!p || p.status === 'omitido' || !p.sasUrl) {
-          update(i, { status: 'error', error: p?.reason || 'No se pudo preparar' })
-          continue
-        }
-        update(i, { status: 'up', pct: 0 })
-        try {
-          await uploadFileToBlob(p.sasUrl, items[i].file, p.contentType, loaded => {
-            update(i, { pct: Math.min(100, Math.round((loaded / (items[i].size || 1)) * 100)) })
-          })
-          update(i, { status: 'done', pct: 100 })
-          anyOk = true
-        } catch (e) {
-          update(i, { status: 'error', error: e.message })
-        }
-      }
-      if (anyOk) onDone?.()
-    } catch (e) {
-      idxs.forEach(i => update(i, { status: 'error', error: e.message }))
-    } finally { setBusy(false) }
+  // La subida se delega al gestor global: sigue en segundo plano aunque
+  // cierres el modal o navegues a otra sección.
+  function start() {
+    if (!items.length) return
+    enqueue(items, { sectionId, sectionLabel, folder })
+    onClose()
   }
 
-  const pending = items.filter(it => it.status !== 'done').length
-  const allDone = items.length > 0 && pending === 0
-
   return (
-    <Modal open={open} onClose={() => !busy && onClose()} wide
+    <Modal open={open} onClose={onClose} wide
       title="Subir archivos" subtitle={`A la carpeta “${folder}”`}
       footer={<>
-        <button className="btn btn-ghost" onClick={onClose} disabled={busy}>{allDone ? 'Cerrar' : 'Cancelar'}</button>
-        <button className="btn btn-primary" onClick={start} disabled={busy || pending === 0}>
-          {busy ? 'Subiendo...' : `Subir ${pending || ''}`.trim()}
+        <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+        <button className="btn btn-primary" onClick={start} disabled={!items.length}>
+          {`Subir ${items.length || ''}`.trim()}
         </button>
       </>}
     >
@@ -361,24 +342,22 @@ function UploadModal({ open, onClose, sectionId, folder, onDone }) {
 
       {items.length > 0 && (
         <div className="upload-list">
-          {items.map((it, i) => (
-            <div key={i} className={`upload-item ${it.status}`}>
+          {items.map((f, i) => (
+            <div key={i} className="upload-item">
               <div className="upload-item-top">
-                <span className="upload-item-name" title={it.name}>{it.name}</span>
-                <span className="upload-item-size">
-                  {it.status === 'error' ? (it.error || 'Error') : it.status === 'done' ? 'Listo' : fmtSize(it.size)}
-                </span>
-                {!busy && it.status !== 'done' && (
-                  <button className="upload-item-x" onClick={() => removeAt(i)} aria-label={`Quitar ${it.name}`}>×</button>
-                )}
+                <span className="upload-item-name" title={f.name}>{f.name}</span>
+                <span className="upload-item-size">{fmtSize(f.size)}</span>
+                <button className="upload-item-x" onClick={() => removeAt(i)} aria-label={`Quitar ${f.name}`}>×</button>
               </div>
-              {(it.status === 'up' || it.status === 'done') && (
-                <div className="upload-bar"><div className="upload-bar-fill" style={{ width: `${it.pct}%` }} /></div>
-              )}
             </div>
           ))}
         </div>
       )}
+
+      <p className="field-help" style={{ marginTop: 12 }}>
+        La subida continúa en segundo plano: puedes cerrar esta ventana y seguir navegando.
+        Verás el progreso abajo a la derecha.
+      </p>
     </Modal>
   )
 }

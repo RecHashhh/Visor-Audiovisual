@@ -7,6 +7,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { api } from '../utils/api'
 import { uploadFileToBlob } from '../utils/blobUpload'
+import { useUploads } from '../utils/uploads'
 import { useAuthz, hasCap, canItem } from '../utils/authz'
 import { SECTIONS } from '../config/sections'
 
@@ -414,6 +415,7 @@ function RemoteSource({ source, projectCode, projectName, prefijo, recursive, re
 
 /* ═══════════════════════════ DESTINO: BIBLIOTECA ═══════════════════════════ */
 function LibraryUpload({ sections, me }) {
+  const { enqueue } = useUploads()
   const [sectionId, setSectionId] = useState(sections[0]?.id || '')
   const [folders, setFolders] = useState([])
   const [folder, setFolder] = useState('')
@@ -452,28 +454,17 @@ function LibraryUpload({ sections, me }) {
     finally { setBusy(false) }
   }
 
-  async function upload(e) {
+  // Se delega al gestor global: sube directo al blob en segundo plano, así
+  // puedes seguir navegando mientras se sube un video pesado.
+  function upload(e) {
     const chosen = Array.from(e.target.files || [])
     if (!chosen.length || !folder) return
-    setBusy(true); setMsg(null)
-    try {
-      // Subida DIRECTA al blob (SAS por archivo): no pasa por la Function, así
-      // los archivos grandes no chocan con el límite de tamaño (413).
-      const plan = await api.postMediaUploadPlan(sectionId, folder, chosen.map(f => ({ name: f.name, size: f.size })))
-      const planned = plan.files || []
-      let ok = 0, fail = 0
-      for (let i = 0; i < chosen.length; i++) {
-        const p = planned[i]
-        setMsg({ ok: true, text: `Subiendo ${i + 1}/${chosen.length}…` })
-        if (!p || p.status === 'omitido' || !p.sasUrl) { fail++; continue }
-        try {
-          await uploadFileToBlob(p.sasUrl, chosen[i], p.contentType)
-          ok++
-        } catch { fail++ }
-      }
-      setMsg({ ok: fail === 0, text: `${ok} subido${ok !== 1 ? 's' : ''}${fail ? `, ${fail} con error` : ''}.` })
-    } catch (e2) { setMsg({ ok: false, text: `No se pudo subir: ${e2.message}` }) }
-    finally { setBusy(false); if (fileRef.current) fileRef.current.value = '' }
+    enqueue(chosen, { sectionId, sectionLabel: section?.label, folder })
+    setMsg({
+      ok: true,
+      text: `Subida iniciada (${chosen.length} archivo${chosen.length !== 1 ? 's' : ''}). Puedes seguir navegando; el progreso aparece abajo a la derecha.`,
+    })
+    if (fileRef.current) fileRef.current.value = ''
   }
 
   if (!sections.length) return <div className="alert alert-info">No tienes permiso para subir a la biblioteca.</div>
@@ -505,7 +496,7 @@ function LibraryUpload({ sections, me }) {
       <div className="up-lib-upload">
         <input ref={fileRef} type="file" multiple hidden onChange={upload} />
         <button className="btn btn-primary" onClick={() => fileRef.current?.click()} disabled={busy || !folder}>
-          {busy ? 'Subiendo…' : 'Subir archivos a esta carpeta'}
+          Subir archivos a esta carpeta
         </button>
         <span className="up-hint">Los archivos conservan su nombre original. Ideal para logos, plantillas, PDFs y material gráfico.</span>
       </div>

@@ -5,6 +5,7 @@ import Sidebar from './Sidebar'
 import TopBar from './TopBar'
 import CommandPalette from './CommandPalette'
 import { useAuthz } from '../utils/authz'
+import { UploadTray } from '../utils/uploads'
 import { logoutLocal } from '../authConfig'
 
 const ROUTE_TITLES = [
@@ -76,6 +77,7 @@ export default function AppShell() {
           <Outlet />
         </main>
       </div>
+      <UploadTray />
     </div>
   )
 }

@@ -7,6 +7,7 @@ import LoginPage      from './pages/LoginPage'
 import AppShell       from './components/AppShell'
 import { SECTIONS }   from './config/sections'
 import { AuthzProvider, RequireSection, RequireCap } from './utils/authz'
+import { UploadsProvider } from './utils/uploads'
 
 // Code splitting por página: la carga inicial solo trae el shell + login;
 // cada sección baja su chunk la primera vez que se visita.
@@ -69,8 +70,9 @@ export default function App() {
   }, [isAuth, inProgress])
 
   return (
-    <Suspense fallback={<PageLoader />}>
-      <Routes>
+    <UploadsProvider>
+      <Suspense fallback={<PageLoader />}>
+        <Routes>
         {/* Rutas públicas — sin layout */}
         <Route path="/login"        element={<LoginPage />} />
         <Route path="/share/:token" element={<SharePage />} />
@@ -121,9 +123,10 @@ export default function App() {
           <Route path="/enlaces" element={<RequireCap cap="share"><SharesPage /></RequireCap>} />
         </Route>
 
-        {/* Catch-all */}
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </Suspense>
+          {/* Catch-all */}
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Suspense>
+    </UploadsProvider>
   )
 }
