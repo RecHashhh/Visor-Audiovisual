@@ -310,16 +310,20 @@ export default function MediaFolderPage({ sectionId }) {
 
           {filtered.length === 0
             ? <div className="empty"><div className="empty-text">Ninguna variante coincide con esos filtros</div></div>
-            : FORMAT_ORDER.map(fo => {
-                const group = filtered.filter(v => v.format === fo)
-                if (group.length === 0) return null
-                return (
-                  <section key={fo} className="logo-group">
-                    <h2 className="logo-group-title">{FORMAT_LABEL[fo]}<span className="logo-group-count">{group.length}</span></h2>
-                    <div className="logo-grid">{group.map(v => <LogoTile key={v.path} variant={v} brandName={meta?.name || folder} onOpen={openViewer} />)}</div>
-                  </section>
-                )
-              })}
+            : (
+              <div className="logo-groups">
+                {FORMAT_ORDER.map(fo => {
+                  const group = filtered.filter(v => v.format === fo)
+                  if (group.length === 0) return null
+                  return (
+                    <section key={fo} className="logo-group">
+                      <h2 className="logo-group-title">{FORMAT_LABEL[fo]}<span className="logo-group-count">{group.length}</span></h2>
+                      <div className="logo-grid">{group.map(v => <LogoTile key={v.path} variant={v} brandName={meta?.name || folder} onOpen={openViewer} />)}</div>
+                    </section>
+                  )
+                })}
+              </div>
+            )}
         </>
       )}
 
