@@ -2237,6 +2237,17 @@ textarea.field-input { resize: vertical; min-height: 60px; font-family: var(--fo
 .media-lightbox-nav.next { right: 16px; }
 .media-lightbox-counter { position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%); font-size: 0.8rem; color: #aeb6c6; }
 
+/* Visor universal (cualquier archivo) */
+.fv-stage { width: min(1150px, 100%); }
+.fv-body { width: 100%; height: 78vh; display: flex; align-items: center; justify-content: center; }
+.fv-body img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5); }
+.fv-media { max-width: 100%; max-height: 100%; border-radius: 8px; background: #000; }
+.fv-audio { width: min(560px, 90%); }
+.fv-frame { width: 100%; height: 100%; border: 0; border-radius: 8px; background: #fff; }
+.fv-text { width: 100%; height: 100%; margin: 0; overflow: auto; background: #0e1017; color: #cdd3e0; padding: 16px; border-radius: 8px; font-family: var(--font-mono); font-size: 0.8rem; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.fv-none { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; color: #c4cad8; text-align: center; padding: 24px; }
+.fv-none p { max-width: 44ch; }
+
 /* ── RESPONSIVE ─────────────────────────────────────────── */
 @media (max-width: 900px) {
   .shell { grid-template-columns: 1fr; }

@@ -26,6 +26,23 @@ const IMG_EXT = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'tif', 'tiff']
 
 const FONT_EXT = ['ttf', 'otf', 'woff', 'woff2']
 const HTML_EXT = ['html', 'htm']
+const VIDEO_EXT = ['mp4', 'webm', 'ogg', 'ogv', 'mov', 'm4v']
+const AUDIO_EXT = ['mp3', 'wav', 'm4a', 'aac', 'oga']
+const OFFICE_EXT = ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx']
+const TEXT_EXT = ['txt', 'csv', 'md', 'json', 'xml', 'log', 'srt', 'yml', 'yaml']
+
+// Qué visor usar para cada archivo en el modal grande.
+function viewerKind(name) {
+  const e = extOf(name)
+  if (IMG_EXT.includes(e)) return 'image'
+  if (VIDEO_EXT.includes(e)) return 'video'
+  if (AUDIO_EXT.includes(e)) return 'audio'
+  if (e === 'pdf') return 'pdf'
+  if (OFFICE_EXT.includes(e)) return 'office'
+  if (HTML_EXT.includes(e)) return 'html'
+  if (TEXT_EXT.includes(e)) return 'text'
+  return 'none' // .ai, .zip, .psd… sin visor web
+}
 const extOf = (name) => (name.split('.').pop() || '').toLowerCase()
 const isImage = (name) => IMG_EXT.includes(extOf(name))
 const isFont = (name) => FONT_EXT.includes(extOf(name))
@@ -155,20 +172,24 @@ export default function MediaFolderPage({ sectionId }) {
   // "Archivos" = lo que no es imagen, ni fuente (→ Tipografía), ni html (→ Firmas).
   const otherDocs = otherFiles.filter(f => !isImage(f.name) && !isFont(f.name) && !isHtml(f.name))
 
-  // Lista maestra de imágenes de la carpeta (variantes + otras imágenes) para el
-  // visor grande: al abrir una, las flechas recorren TODAS en orden alfabético.
   const imageFiles = useMemo(
     () => files.filter(f => isImage(f.name)).map(f => ({ ...f, isLogo: variantPaths.has(f.path) })),
     [files, variantPaths]
   )
+  // Lista maestra de TODOS los archivos de la carpeta: el visor grande los
+  // recorre con las flechas sin importar el tipo (imagen, PDF, Office, video…).
+  const allFiles = useMemo(
+    () => files.map(f => ({ ...f, isLogo: variantPaths.has(f.path) })),
+    [files, variantPaths]
+  )
   const [viewer, setViewer] = useState(-1)
   const openViewer = (path) => {
-    const i = imageFiles.findIndex(f => f.path === path)
+    const i = allFiles.findIndex(f => f.path === path)
     if (i >= 0) setViewer(i)
   }
   const moveViewer = (delta) => setViewer(i => {
     const n = i + delta
-    return n >= 0 && n < imageFiles.length ? n : i
+    return n >= 0 && n < allFiles.length ? n : i
   })
   const meta = data?.meta
   const hasFilters = format !== 'all' || background !== 'all' || color !== 'all'
@@ -344,13 +365,13 @@ export default function MediaFolderPage({ sectionId }) {
         <section className="logo-group">
           <h2 className="logo-group-title">Archivos<span className="logo-group-count">{otherDocs.length}</span></h2>
           <div className="media-img-grid">
-            {otherDocs.map(f => <FileTile key={f.path} file={f} previewPath={findPreviewImage(f.name, imageFiles)?.path} />)}
+            {otherDocs.map(f => <FileTile key={f.path} file={f} previewPath={findPreviewImage(f.name, imageFiles)?.path} onOpen={openViewer} />)}
           </div>
         </section>
       )}
 
-      {viewer >= 0 && imageFiles[viewer] && (
-        <Lightbox images={imageFiles} index={viewer} onClose={() => setViewer(-1)} onMove={moveViewer} />
+      {viewer >= 0 && allFiles[viewer] && (
+        <FileViewer files={allFiles} index={viewer} onClose={() => setViewer(-1)} onMove={moveViewer} />
       )}
 
       {canUpload && (
@@ -498,17 +519,45 @@ function UploadModal({ open, onClose, sectionId, sectionLabel, folderPath, folde
   )
 }
 
-function Lightbox({ images, index, onClose, onMove }) {
-  const img = images[index]
+// Visor universal: abre cualquier archivo en grande según su tipo (imagen,
+// video, audio, PDF, Office vía visor de Microsoft, HTML, texto) y para los
+// que no tienen visor web muestra el archivo con botón de descarga.
+function FileViewer({ files, index, onClose, onMove }) {
+  const f = files[index]
+  const name = f ? f.name.split('/').pop() : ''
+  const kind = f ? viewerKind(name) : 'none'
   const [src, setSrc] = useState(null)
+  const [text, setText] = useState(null)
+  const [error, setError] = useState(false)
+
   useEffect(() => {
-    if (!img) return
+    if (!f) return
     let alive = true
-    setSrc(null)
-    fetchThumb(img.path, { w: 1600, mode: img.isLogo ? 'logo' : '' })
-      .then(url => { if (alive) setSrc(url) }).catch(() => {})
+    setSrc(null); setText(null); setError(false)
+    ;(async () => {
+      try {
+        if (kind === 'none') return
+        if (kind === 'image') {
+          const url = await fetchThumb(f.path, { w: 1600, mode: f.isLogo ? 'logo' : '' })
+          if (alive) setSrc(url)
+          return
+        }
+        const { sasUrl } = await api.getSasUrl(f.path, 60)
+        if (!alive) return
+        if (kind === 'text') {
+          const r = await fetch(sasUrl)
+          const t = await r.text()
+          if (alive) setText(t.slice(0, 200000))
+        } else if (kind === 'office') {
+          setSrc(`https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(sasUrl)}`)
+        } else {
+          setSrc(sasUrl) // pdf, video, audio, html
+        }
+      } catch { if (alive) setError(true) }
+    })()
     return () => { alive = false }
-  }, [img?.path]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [f?.path, kind]) // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     function onKey(e) {
       if (e.key === 'Escape') onClose()
@@ -518,32 +567,56 @@ function Lightbox({ images, index, onClose, onMove }) {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose, onMove])
-  if (!img) return null
-  const name = img.name.split('/').pop()
+
+  if (!f) return null
+  const k = fileKind(name)
   const hasPrev = index > 0
-  const hasNext = index < images.length - 1
+  const hasNext = index < files.length - 1
+  const spinner = <div className="spinner" />
+
+  let body
+  if (error) {
+    body = <div className="fv-none"><p>No se pudo cargar la vista previa. Descarga el archivo para verlo.</p></div>
+  } else if (kind === 'image') {
+    body = src ? <img src={src} alt={name} /> : spinner
+  } else if (kind === 'video') {
+    body = src ? <video src={src} controls autoPlay className="fv-media" /> : spinner
+  } else if (kind === 'audio') {
+    body = src ? <audio src={src} controls className="fv-audio" /> : spinner
+  } else if (kind === 'pdf' || kind === 'office' || kind === 'html') {
+    body = src ? <iframe src={src} className="fv-frame" title={name} /> : spinner
+  } else if (kind === 'text') {
+    body = text != null ? <pre className="fv-text">{text}</pre> : spinner
+  } else {
+    body = (
+      <div className="fv-none">
+        <span className="file-tile-glyph" style={{ color: k.tint, fontSize: '3rem' }}>{k.glyph || k.badge}</span>
+        <p>Este formato ({k.badge}) no tiene vista previa en el navegador.</p>
+        <button className="btn btn-primary" onClick={() => downloadFile(f.path, name).catch(() => {})}>Descargar archivo</button>
+      </div>
+    )
+  }
+
   return (
     <div className="media-lightbox" onClick={onClose} role="dialog" aria-modal="true" aria-label={name}>
       <button className="media-lightbox-close" onClick={onClose} aria-label="Cerrar (Esc)">×</button>
       <button className="media-lightbox-nav prev" onClick={e => { e.stopPropagation(); onMove(-1) }}
         disabled={!hasPrev} aria-label="Anterior (←)">‹</button>
-      <figure className="media-lightbox-stage" onClick={e => e.stopPropagation()}>
-        <div className="media-lightbox-img">
-          {src ? <img src={src} alt={name} /> : <div className="spinner" />}
-        </div>
+      <figure className="media-lightbox-stage fv-stage" onClick={e => e.stopPropagation()}>
+        <div className={`fv-body fv-${kind}`}>{body}</div>
         <figcaption className="media-lightbox-caption">
           <span className="media-lightbox-name">{name}</span>
           <span className="media-lightbox-meta">
-            {img.lastModified && <span>Subido el {fmtDate(img.lastModified)}</span>}
-            <button className="media-lightbox-download" onClick={() => downloadFile(img.path, name).catch(() => {})}>
-              Descargar original
+            {f.lastModified && <span>{fmtDate(f.lastModified)}</span>}
+            <button className="media-lightbox-download" onClick={() => downloadFile(f.path, name).catch(() => {})}>
+              Descargar
             </button>
           </span>
         </figcaption>
       </figure>
       <button className="media-lightbox-nav next" onClick={e => { e.stopPropagation(); onMove(1) }}
         disabled={!hasNext} aria-label="Siguiente (→)">›</button>
-      <div className="media-lightbox-counter">{index + 1} / {images.length}</div>
+      <div className="media-lightbox-counter">{index + 1} / {files.length}</div>
     </div>
   )
 }
@@ -680,7 +753,7 @@ function fileKind(name) {
   return FILE_KINDS[ext] || { badge: (ext || 'FILE').toUpperCase().slice(0, 4), glyph: '', tint: '#9aa3b8', bg: '#161821' }
 }
 
-function FileTile({ file: f, previewPath }) {
+function FileTile({ file: f, previewPath, onOpen }) {
   const name = f.name.split('/').pop()
   const k = fileKind(name)
   const [src, setSrc] = useState(null)
@@ -692,14 +765,15 @@ function FileTile({ file: f, previewPath }) {
   }, [previewPath])
   return (
     <div className="media-img-tile">
-      <div className="file-tile-preview" style={{ background: src ? '#f2f3f7' : k.bg }}>
+      <button type="button" className="file-tile-preview media-open" style={{ background: src ? '#f2f3f7' : k.bg }}
+        onClick={() => onOpen?.(f.path)} aria-label={`Ver ${name} en grande`}>
         {src
           ? <img className="file-tile-img" src={src} alt={name} />
           : k.glyph
             ? <span className="file-tile-glyph" style={{ color: k.tint }}>{k.glyph}</span>
             : <DocIcon color={k.tint} />}
         <span className="file-tile-badge" style={{ background: k.tint }}>{k.badge}</span>
-      </div>
+      </button>
       <div className="media-img-caption">
         <div className="media-img-info">
           <span className="media-img-name" title={name}>{name}</span>
