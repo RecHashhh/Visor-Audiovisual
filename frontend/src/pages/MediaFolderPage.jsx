@@ -26,8 +26,10 @@ const IMG_EXT = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'tif', 'tiff']
 
 const FONT_EXT = ['ttf', 'otf', 'woff', 'woff2']
 const HTML_EXT = ['html', 'htm']
-const VIDEO_EXT = ['mp4', 'webm', 'ogg', 'ogv', 'mov', 'm4v']
-const AUDIO_EXT = ['mp3', 'wav', 'm4a', 'aac', 'oga']
+// Se intenta reproducir todos estos; si el códec no lo soporta el navegador
+// (p. ej. HEVC sin decodificador, .mkv, .avi, .insv…), el visor cae a descarga.
+const VIDEO_EXT = ['mp4', 'm4v', 'webm', 'ogg', 'ogv', 'mov', 'mkv', 'm2ts', 'mts', 'ts', 'hevc', 'h265', '3gp', 'avi', 'wmv', 'flv']
+const AUDIO_EXT = ['mp3', 'wav', 'm4a', 'aac', 'oga', 'flac', 'opus']
 const OFFICE_EXT = ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx']
 const TEXT_EXT = ['txt', 'csv', 'md', 'json', 'xml', 'log', 'srt', 'yml', 'yaml']
 
@@ -529,11 +531,12 @@ function FileViewer({ files, index, onClose, onMove }) {
   const [src, setSrc] = useState(null)
   const [text, setText] = useState(null)
   const [error, setError] = useState(false)
+  const [mediaError, setMediaError] = useState(false)
 
   useEffect(() => {
     if (!f) return
     let alive = true
-    setSrc(null); setText(null); setError(false)
+    setSrc(null); setText(null); setError(false); setMediaError(false)
     ;(async () => {
       try {
         if (kind === 'none') return
@@ -574,27 +577,33 @@ function FileViewer({ files, index, onClose, onMove }) {
   const hasNext = index < files.length - 1
   const spinner = <div className="spinner" />
 
+  const downloadPanel = (label) => (
+    <div className="fv-none">
+      <span className="file-tile-glyph" style={{ color: k.tint, fontSize: '3rem' }}>{k.glyph || k.badge}</span>
+      <p>{label}</p>
+      <button className="btn btn-primary" onClick={() => downloadFile(f.path, name).catch(() => {})}>Descargar archivo</button>
+    </div>
+  )
+
   let body
   if (error) {
-    body = <div className="fv-none"><p>No se pudo cargar la vista previa. Descarga el archivo para verlo.</p></div>
+    body = downloadPanel('No se pudo cargar la vista previa. Descarga el archivo para verlo.')
   } else if (kind === 'image') {
     body = src ? <img src={src} alt={name} /> : spinner
   } else if (kind === 'video') {
-    body = src ? <video src={src} controls autoPlay className="fv-media" /> : spinner
+    body = mediaError
+      ? downloadPanel('Este video usa un códec que tu navegador no puede reproducir (p. ej. HEVC, MKV o AVI). Descárgalo para verlo.')
+      : src ? <video src={src} controls autoPlay className="fv-media" onError={() => setMediaError(true)} /> : spinner
   } else if (kind === 'audio') {
-    body = src ? <audio src={src} controls className="fv-audio" /> : spinner
+    body = mediaError
+      ? downloadPanel('Este audio usa un formato que tu navegador no puede reproducir. Descárgalo para escucharlo.')
+      : src ? <audio src={src} controls className="fv-audio" onError={() => setMediaError(true)} /> : spinner
   } else if (kind === 'pdf' || kind === 'office' || kind === 'html') {
     body = src ? <iframe src={src} className="fv-frame" title={name} /> : spinner
   } else if (kind === 'text') {
     body = text != null ? <pre className="fv-text">{text}</pre> : spinner
   } else {
-    body = (
-      <div className="fv-none">
-        <span className="file-tile-glyph" style={{ color: k.tint, fontSize: '3rem' }}>{k.glyph || k.badge}</span>
-        <p>Este formato ({k.badge}) no tiene vista previa en el navegador.</p>
-        <button className="btn btn-primary" onClick={() => downloadFile(f.path, name).catch(() => {})}>Descargar archivo</button>
-      </div>
-    )
+    body = downloadPanel(`Este formato (${k.badge}) no tiene vista previa en el navegador.`)
   }
 
   return (
