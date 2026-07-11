@@ -2050,6 +2050,15 @@ code { font-family: var(--font-mono); background: var(--bg3); padding: 2px 6px; 
 .up-plan-summary .muted { color: var(--text-faint); }
 .up-migrate-progress { display: flex; flex-direction: column; gap: 6px; }
 .up-migrate-counts { font-size: 0.78rem; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+
+/* Progreso general de subida (Mi equipo) */
+.up-overall { margin-top: 14px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg2); display: flex; flex-direction: column; gap: 8px; }
+.up-overall.is-done { border-color: var(--green-bd); background: var(--green-bg); }
+.up-overall-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.up-overall-title { font-size: 0.9rem; font-weight: 600; color: var(--text); }
+.up-overall.is-done .up-overall-title { color: var(--green); }
+.up-overall-pct { font-size: 0.9rem; font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
+.up-overall-meta { display: flex; flex-wrap: wrap; gap: 6px; font-size: 0.8rem; color: var(--text-dim); font-variant-numeric: tabular-nums; }
 .up-library { display: flex; flex-direction: column; gap: 16px; max-width: 640px; }
 .up-lib-row { display: flex; gap: 14px; flex-wrap: wrap; }
 .up-lib-row .field-select { flex: 1; min-width: 180px; }

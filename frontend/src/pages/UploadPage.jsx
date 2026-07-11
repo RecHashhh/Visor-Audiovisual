@@ -23,6 +23,20 @@ function fmtSize(b) {
   if (b < 1024 * 1024 * 1024) return `${(b / 1024 / 1024).toFixed(1)} MB`
   return `${(b / 1024 / 1024 / 1024).toFixed(2)} GB`
 }
+function fmtSpeed(bps) {
+  if (!bps || bps <= 0) return '—'
+  if (bps < 1024 * 1024) return `${Math.round(bps / 1024)} KB/s`
+  return `${(bps / 1024 / 1024).toFixed(1)} MB/s`
+}
+function fmtEta(sec) {
+  if (sec == null || !isFinite(sec)) return 'calculando…'
+  sec = Math.round(sec)
+  if (sec < 60) return `~${sec} s`
+  const m = Math.round(sec / 60)
+  if (m < 60) return `~${m} min`
+  const h = Math.floor(m / 60)
+  return `~${h} h ${m % 60} min`
+}
 
 export default function UploadPage() {
   const { me } = useAuthz()
@@ -242,6 +256,8 @@ function LocalSource({ projectCode, projectName, prefijo, subfolder, keepNames, 
   const [rows, setRows] = useState([])
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState(null)
+  const [stats, setStats] = useState(null)   // { doneBytes, totalBytes, ok, fail, total, speed, etaSec, done }
+  const loadedRef = useRef({})
   const filesRef = useRef(null)
   const folderRef = useRef(null)
 
@@ -276,23 +292,48 @@ function LocalSource({ projectCode, projectName, prefijo, subfolder, keepNames, 
     if (!todo.length) { setMsg({ ok: false, text: 'No hay archivos nuevos seleccionados. Analiza primero.' }); return }
     setBusy(true); setMsg(null)
     const patch = (blob, p) => setRows(rs => rs.map(r => (r.blob === blob ? { ...r, ...p } : r)))
+
+    const totalBytes = todo.reduce((s, r) => s + (r.total || 0), 0)
+    loadedRef.current = {}
+    const startedAt = Date.now()
+    setStats({ doneBytes: 0, totalBytes, ok: 0, fail: 0, total: todo.length, speed: 0, etaSec: null, done: false })
+    // Un tick cada 500ms recalcula bytes subidos → velocidad y tiempo restante.
+    const timer = setInterval(() => {
+      const doneBytes = Object.values(loadedRef.current).reduce((a, b) => a + b, 0)
+      const elapsed = (Date.now() - startedAt) / 1000
+      const speed = elapsed > 0 ? doneBytes / elapsed : 0
+      const etaSec = speed > 0 ? Math.max(0, totalBytes - doneBytes) / speed : null
+      setStats(s => (s ? { ...s, doneBytes, speed, etaSec } : s))
+    }, 500)
+
     let ok = 0, fail = 0
     const queue = [...todo]
     const worker = async () => {
       while (queue.length) {
         const row = queue.shift()
         const src = files[row.srcIdx]
-        if (!src?.file) { fail++; patch(row.blob, { status: 'error', error: 'Archivo no disponible' }); continue }
+        if (!src?.file) { fail++; setStats(s => s && { ...s, fail: s.fail + 1 }); patch(row.blob, { status: 'error', error: 'Archivo no disponible' }); continue }
         patch(row.blob, { status: 'subiendo', done: 0, error: null })
         try {
-          await uploadFileToBlob(row.sasUrl, src.file, row.contentType, loaded => patch(row.blob, { done: loaded }))
-          ok++; patch(row.blob, { status: 'ok', done: src.size })
-        } catch (e) { fail++; patch(row.blob, { status: 'error', error: e.message }) }
+          await uploadFileToBlob(row.sasUrl, src.file, row.contentType, loaded => {
+            loadedRef.current[row.blob] = loaded
+            patch(row.blob, { done: loaded })
+          })
+          ok++; loadedRef.current[row.blob] = src.size
+          patch(row.blob, { status: 'ok', done: src.size })
+          setStats(s => s && { ...s, ok: s.ok + 1 })
+        } catch (e) {
+          fail++; patch(row.blob, { status: 'error', error: e.message })
+          setStats(s => s && { ...s, fail: s.fail + 1 })
+        }
       }
     }
     await Promise.all(Array.from({ length: Math.min(LOCAL_CONCURRENCY, queue.length) }, worker))
+    clearInterval(timer)
+    const doneBytes = Object.values(loadedRef.current).reduce((a, b) => a + b, 0)
+    setStats(s => (s ? { ...s, doneBytes, etaSec: 0, speed: 0, done: true } : s))
     if (refreshIndex && ok > 0) { try { await api.refreshIndex() } catch { /* índice nocturno lo cubre */ } }
-    setMsg({ ok: fail === 0, text: `${ok} subido${ok !== 1 ? 's' : ''}${fail ? `, ${fail} con error` : ''}.` })
+    setMsg({ ok: fail === 0, text: `Listo: ${ok} subido${ok !== 1 ? 's' : ''}${fail ? `, ${fail} con error` : ''}.` })
     setBusy(false)
   }
 
@@ -322,9 +363,35 @@ function LocalSource({ projectCode, projectName, prefijo, subfolder, keepNames, 
         <button type="button" className="up-btn-ghost" onClick={analyze} disabled={busy || !files.length}>{busy && !rows.length ? 'Analizando…' : 'Analizar archivos'}</button>
         {rows.length > 0 && <button type="button" className="up-btn-primary" onClick={start} disabled={busy || selCount === 0}>{busy ? 'Subiendo…' : `Subir ${selCount} archivo${selCount !== 1 ? 's' : ''}`}</button>}
       </div>
+      {stats && <UploadStats stats={stats} />}
       {msg && <div className={`alert ${msg.ok ? 'alert-ok' : 'alert-error'}`} style={{ marginTop: 12 }}>{msg.text}</div>}
 
       {rows.length > 0 && <FileRows rows={rows.map(r => ({ ...r, phase: r.status }))} />}
+    </div>
+  )
+}
+
+/* Progreso general: barra, % , subido/total, velocidad y tiempo restante */
+function UploadStats({ stats }) {
+  const { doneBytes, totalBytes, ok, fail, total, speed, etaSec, done } = stats
+  const pct = totalBytes > 0 ? Math.min(100, Math.round((doneBytes / totalBytes) * 100)) : (done ? 100 : 0)
+  return (
+    <div className={`up-overall ${done ? 'is-done' : ''}`}>
+      <div className="up-overall-top">
+        <span className="up-overall-title">
+          {done
+            ? <>✓ Subida completa · {ok} de {total}{fail ? ` (${fail} con error)` : ''}</>
+            : <>Subiendo… {ok} de {total} archivos</>}
+        </span>
+        <span className="up-overall-pct">{pct}%</span>
+      </div>
+      <div className="up-progress"><div className="up-progress-bar" style={{ width: `${pct}%` }} /></div>
+      <div className="up-overall-meta">
+        <span>{fmtSize(doneBytes)} de {fmtSize(totalBytes)}</span>
+        {!done && <span>· {fmtSpeed(speed)}</span>}
+        {!done && <span>· falta {fmtEta(etaSec)}</span>}
+        {done && <span>· terminado</span>}
+      </div>
     </div>
   )
 }
