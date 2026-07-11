@@ -13,6 +13,7 @@ import { sectionById } from '../config/sections'
 import Modal from '../components/Modal'
 import FichaModal from '../components/FichaModal'
 import { useUploads } from '../utils/uploads'
+import { renderPdfThumb } from '../utils/pdfThumb'
 
 const FORMAT_LABEL = {
   centrada: 'Centrada', horizontal: 'Horizontal', simbolo: 'Símbolo',
@@ -765,19 +766,35 @@ function fileKind(name) {
 function FileTile({ file: f, previewPath, onOpen }) {
   const name = f.name.split('/').pop()
   const k = fileKind(name)
+  const isPdf = extOf(name) === 'pdf'
   const [src, setSrc] = useState(null)
+  const [pageThumb, setPageThumb] = useState(null)   // miniatura de la 1ª página del PDF
   useEffect(() => {
     if (!previewPath) return
     let alive = true
     fetchThumb(previewPath, { w: 480, mode: 'logo' }).then(u => { if (alive) setSrc(u) }).catch(() => {})
     return () => { alive = false }
   }, [previewPath])
+  // Miniatura real de la 1ª página para PDFs (best-effort, sin servidor).
+  useEffect(() => {
+    if (!isPdf || previewPath) return
+    let alive = true
+    ;(async () => {
+      try {
+        const { sasUrl } = await api.getSasUrl(f.path, 30)
+        const thumb = await renderPdfThumb(sasUrl, { width: 500 })
+        if (alive) setPageThumb(thumb)
+      } catch { /* CORS o PDF protegido → se queda el icono */ }
+    })()
+    return () => { alive = false }
+  }, [f.path, isPdf, previewPath])
+  const img = src || pageThumb
   return (
     <div className="media-img-tile">
-      <button type="button" className="file-tile-preview media-open" style={{ background: src ? '#f2f3f7' : k.bg }}
+      <button type="button" className="file-tile-preview media-open" style={{ background: img ? '#f2f3f7' : k.bg }}
         onClick={() => onOpen?.(f.path)} aria-label={`Ver ${name} en grande`}>
-        {src
-          ? <img className="file-tile-img" src={src} alt={name} />
+        {img
+          ? <img className={`file-tile-img ${pageThumb && !src ? 'file-tile-page' : ''}`} src={img} alt={name} />
           : k.glyph
             ? <span className="file-tile-glyph" style={{ color: k.tint }}>{k.glyph}</span>
             : <DocIcon color={k.tint} />}
