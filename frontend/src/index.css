@@ -773,7 +773,17 @@ code { font-family: var(--font-mono); background: var(--bg3); padding: 2px 6px; 
   justify-content: center;
   color: #fff;
 }
+.link-card-banner.has-img { background-size: cover; background-position: center; position: relative; }
 .link-card-glyph svg { width: 42px; height: 42px; display: block; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.18)); }
+.link-card-badge {
+  position: absolute;
+  bottom: 8px; left: 8px;
+  width: 30px; height: 30px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 8px; color: #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+}
+.link-card-badge svg { width: 17px; height: 17px; }
 .link-card-body { padding: 12px 14px 14px; }
 .link-card-title { font-weight: 700; font-size: 0.98rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .link-card-handle { font-size: 0.82rem; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
@@ -818,6 +828,22 @@ code { font-family: var(--font-mono); background: var(--bg3); padding: 2px 6px; 
 .link-preview-net { font-weight: 700; color: var(--text); }
 .link-preview-handle { font-size: 0.85rem; color: var(--text-dim); }
 .field-opt { font-weight: 400; color: var(--text-faint); }
+
+/* Subir imagen propia dentro del modal */
+.link-img-row { display: flex; align-items: center; gap: 12px; }
+.link-img-thumb {
+  width: 76px; height: 56px; flex: none;
+  border-radius: 8px; object-fit: cover;
+  border: 1px solid var(--border);
+  background: var(--bg3);
+}
+.link-img-empty {
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.72rem; color: var(--text-faint); text-align: center;
+}
+.link-img-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.btn-sm { padding: 6px 12px; font-size: 0.85rem; cursor: pointer; }
+label.btn-sm { display: inline-flex; align-items: center; }
 
 /* Cabecera de la página de una marca (título + subir) */
 .brand-page-header {

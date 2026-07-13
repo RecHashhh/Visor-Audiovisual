@@ -2008,12 +2008,17 @@ def _sanitize_link(raw: Any) -> Optional[dict]:
     net = str(raw.get("network") or "").strip().lower()
     if net not in ("instagram", "facebook", "linkedin", "youtube", "tiktok", "x", "whatsapp", "telegram", "website"):
         net = _detect_network(url)
-    return {
+    out = {
         "id": (str(raw.get("id") or "").strip() or uuid.uuid4().hex[:10])[:32],
         "url": url,
         "title": str(raw.get("title") or "").strip()[:120],
         "network": net,
     }
+    # Imagen propia opcional: data URL ya comprimida en el navegador (~<1MB).
+    img = raw.get("image")
+    if isinstance(img, str) and img.startswith("data:image/") and len(img) <= 3_000_000:
+        out["image"] = img
+    return out
 
 @app.route(route="media/{section}/links", methods=["GET", "POST", "OPTIONS"])
 def media_links(req: func.HttpRequest) -> func.HttpResponse:

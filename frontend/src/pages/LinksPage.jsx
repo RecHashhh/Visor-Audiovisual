@@ -66,6 +66,27 @@ function detectNetwork(url) {
   return 'website'
 }
 
+// Reduce una imagen local a un JPEG pequeño (data URL) para guardarla junto al
+// enlace sin depender de SAS ni de que la red permita leer su foto.
+function fileToThumb(file, max = 900) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file)
+    const img = new Image()
+    img.onload = () => {
+      URL.revokeObjectURL(url)
+      const scale = Math.min(1, max / Math.max(img.width, img.height))
+      const w = Math.max(1, Math.round(img.width * scale))
+      const h = Math.max(1, Math.round(img.height * scale))
+      const c = document.createElement('canvas')
+      c.width = w; c.height = h
+      c.getContext('2d').drawImage(img, 0, 0, w, h)
+      resolve(c.toDataURL('image/jpeg', 0.82))
+    }
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('imagen inválida')) }
+    img.src = url
+  })
+}
+
 // "instagram.com/ripconciv/" → "@ripconciv"; si no hay handle, el dominio.
 function handleFrom(url, net) {
   try {
@@ -96,11 +117,22 @@ export default function LinksPage({ sectionId }) {
   }
   useEffect(() => { setLinks(null); load() }, [sectionId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  function openNew() { setFormErr(null); setEditing({ idx: -1, url: '', title: '', network: 'auto' }) }
+  function openNew() { setFormErr(null); setEditing({ idx: -1, url: '', title: '', network: 'auto', image: '' }) }
   function openEdit(i) {
     const l = links[i]
     setFormErr(null)
-    setEditing({ idx: i, url: l.url, title: l.title || '', network: l.network || 'auto' })
+    setEditing({ idx: i, url: l.url, title: l.title || '', network: l.network || 'auto', image: l.image || '' })
+  }
+
+  async function onPickImage(e) {
+    const f = e.target.files && e.target.files[0]
+    if (e.target) e.target.value = ''
+    if (!f) return
+    setFormErr(null)
+    try {
+      const data = await fileToThumb(f)
+      setEditing(ed => (ed ? { ...ed, image: data } : ed))
+    } catch { setFormErr('No se pudo leer la imagen.') }
   }
 
   async function persist(next) {
@@ -118,7 +150,7 @@ export default function LinksPage({ sectionId }) {
     const url = editing.url.trim()
     if (!/^https?:\/\//i.test(url)) { setFormErr('Pega un enlace válido que empiece por http:// o https://'); return }
     const net = editing.network === 'auto' ? detectNetwork(url) : editing.network
-    const item = { url, title: editing.title.trim(), network: net }
+    const item = { url, title: editing.title.trim(), network: net, image: editing.image || '' }
     const next = editing.idx >= 0
       ? links.map((l, i) => (i === editing.idx ? { ...l, ...item } : l))
       : [...(links || []), item]
@@ -175,9 +207,15 @@ export default function LinksPage({ sectionId }) {
             return (
               <div key={l.id || i} className="link-card">
                 <a className="link-card-hit" href={l.url} target="_blank" rel="noopener noreferrer">
-                  <div className="link-card-banner" style={{ background: net.color }}>
-                    <span className="link-card-glyph"><Icon /></span>
-                  </div>
+                  {l.image ? (
+                    <div className="link-card-banner has-img" style={{ backgroundImage: `url(${l.image})` }}>
+                      <span className="link-card-badge" style={{ background: net.color }}><Icon /></span>
+                    </div>
+                  ) : (
+                    <div className="link-card-banner" style={{ background: net.color }}>
+                      <span className="link-card-glyph"><Icon /></span>
+                    </div>
+                  )}
                   <div className="link-card-body">
                     <div className="link-card-title">{l.title || net.label}</div>
                     <div className="link-card-handle">{handleFrom(l.url, l.network)}</div>
@@ -214,8 +252,11 @@ export default function LinksPage({ sectionId }) {
         {editing && (
           <>
             <div className="link-preview">
-              <span className="link-preview-glyph" style={{ background: NETWORKS[detected]?.color }}>
-                {(() => { const P = NETWORKS[detected]?.Icon || WebIcon; return <P /> })()}
+              <span className="link-preview-glyph"
+                style={editing.image
+                  ? { backgroundImage: `url(${editing.image})`, backgroundSize: 'cover', backgroundPosition: 'center' }
+                  : { background: NETWORKS[detected]?.color }}>
+                {!editing.image && (() => { const P = NETWORKS[detected]?.Icon || WebIcon; return <P /> })()}
               </span>
               <div>
                 <div className="link-preview-net">{NETWORKS[detected]?.label}</div>
@@ -240,6 +281,24 @@ export default function LinksPage({ sectionId }) {
                 onChange={e => setEditing({ ...editing, title: e.target.value })}
               />
             </label>
+            <div className="field">
+              <span className="field-label">Imagen propia <span className="field-opt">(opcional)</span></span>
+              <div className="link-img-row">
+                {editing.image
+                  ? <img className="link-img-thumb" src={editing.image} alt="" />
+                  : <div className="link-img-thumb link-img-empty">Sin imagen</div>}
+                <div className="link-img-btns">
+                  <label className="btn btn-ghost btn-sm">
+                    {editing.image ? 'Cambiar imagen' : 'Subir imagen'}
+                    <input type="file" accept="image/*" style={{ display: 'none' }} onChange={onPickImage} />
+                  </label>
+                  {editing.image && (
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditing({ ...editing, image: '' })}>Quitar</button>
+                  )}
+                </div>
+              </div>
+              <span className="field-help">Si subes una, reemplaza el icono de la red en la tarjeta.</span>
+            </div>
             <label className="field">
               <span className="field-label">Red</span>
               <select className="field-input" value={editing.network}
