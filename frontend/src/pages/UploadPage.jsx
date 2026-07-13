@@ -397,6 +397,47 @@ function UploadStats({ stats }) {
 }
 
 /* ── Fuente: SharePoint / OneDrive (migración por lotes con progreso) ── */
+// Migración por COPIA servidor-a-servidor: (1) lanza las copias en tandas
+// (rápido, la Function solo da la orden) y (2) sondea el estado hasta que Azure
+// termina de copiar en segundo plano.
+async function runCopyMigration({ todo, issue, statusBase, onProgress }) {
+  const blobPaths = todo.map(f => f.blobPath)
+  let issued = 0
+  let queue = [...todo]
+  while (queue.length) {
+    const chunk = queue.slice(0, REMOTE_CHUNK)
+    const res = await issue(chunk)
+    const processed = res.processed || 0
+    issued += processed
+    queue = queue.slice(processed || chunk.length)
+    onProgress({ phase: 'issuing', issued, total: todo.length, done: 0, pending: 0, failed: 0 })
+    if (processed === 0) throw new Error('El servidor no pudo lanzar las copias')
+  }
+  // Sondeo del estado de las copias (Azure trabaja en segundo plano).
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const st = await api.postRemoteCopyStatus({ ...statusBase, blobPaths })
+    onProgress({ phase: 'copying', issued, total: st.total, done: st.done, pending: st.pending, failed: (st.failed || 0) + (st.missing || 0) })
+    if ((st.pending || 0) === 0) return { done: st.done, failed: (st.failed || 0) + (st.missing || 0), total: st.total }
+    await new Promise(r => setTimeout(r, 3000))
+  }
+}
+
+function CopyProgress({ progress }) {
+  const { phase, issued, total, done, pending, failed } = progress
+  const pct = total ? Math.round(((phase === 'issuing' ? issued : done) / total) * 100) : 0
+  return (
+    <div className="up-migrate-progress">
+      <div className="up-progress" style={{ width: '100%' }}><div className="up-progress-bar" style={{ width: `${pct}%` }} /></div>
+      <div className="up-migrate-counts">
+        {phase === 'issuing'
+          ? <>Enviando a Azure… {issued} de {total}</>
+          : <>Copiando en Azure… <strong>{done}</strong> de {total} listos{pending ? ` · ${pending} en curso` : ''}{failed ? ` · ${failed} con error` : ''}</>}
+      </div>
+    </div>
+  )
+}
+
 function RemoteSource({ source, projectCode, projectName, prefijo, subfolder, recursive, refreshIndex, ready }) {
   const [spUrl, setSpUrl] = useState('')
   const [odEmail, setOdEmail] = useState('')
@@ -425,29 +466,22 @@ function RemoteSource({ source, projectCode, projectName, prefijo, subfolder, re
     const todo = (plan?.files || []).filter(f => f.status === 'nuevo')
     if (!todo.length) { setMsg({ ok: false, text: 'No hay archivos nuevos para migrar.' }); return }
     setRunning(true); setMsg(null)
-    let done = 0, failed = 0
-    setProgress({ done, failed, total: todo.length })
-    let queue = [...todo]
+    setProgress({ phase: 'issuing', issued: 0, total: todo.length, done: 0, pending: 0, failed: 0 })
     try {
-      while (queue.length) {
-        const chunk = queue.slice(0, REMOTE_CHUNK)
-        const res = await api.postRemoteBatch({
-          projectCode, projectName,
-          items: chunk.map(f => ({ dlUrl: f.dlUrl, blobPath: f.blobPath, name: f.name })),
-        })
-        ;(res.results || []).forEach(r => { if (r.status === 'ok' || r.status === 'existe') done++; else failed++ })
-        const processed = res.processed || 0
-        queue = queue.slice(processed || chunk.length)
-        setProgress({ done, failed, total: todo.length })
-        if (processed === 0) throw new Error('El servidor no pudo procesar la tanda')
-      }
+      const st = await runCopyMigration({
+        todo,
+        issue: chunk => api.postRemoteBatch({
+          projectCode, projectName, subfolder,
+          items: chunk.map(f => ({ driveId: f.driveId, itemId: f.itemId, blobPath: f.blobPath, name: f.name })),
+        }),
+        statusBase: { projectCode, projectName, subfolder },
+        onProgress: setProgress,
+      })
       if (refreshIndex) { try { await api.refreshIndex() } catch { /* índice nocturno */ } }
-      setMsg({ ok: failed === 0, text: `Migración completa: ${done} subidos${failed ? `, ${failed} con error` : ''}.` })
+      setMsg({ ok: st.failed === 0, text: `Copia completa: ${st.done} de ${st.total}${st.failed ? `, ${st.failed} con error` : ''}.` })
     } catch (e) { setMsg({ ok: false, text: `Se detuvo: ${e.message}. Puedes volver a "Migrar" y continúa donde quedó.` }) }
     finally { setRunning(false) }
   }
-
-  const pct = progress && progress.total ? Math.round(((progress.done + progress.failed) / progress.total) * 100) : 0
 
   return (
     <div className="up-remote">
@@ -490,18 +524,9 @@ function RemoteSource({ source, projectCode, projectName, prefijo, subfolder, re
         </div>
       )}
 
-      {progress && (
-        <div className="up-migrate-progress">
-          <div className="up-progress" style={{ width: '100%' }}>
-            <div className="up-progress-bar" style={{ width: `${pct}%` }} />
-          </div>
-          <div className="up-migrate-counts">
-            {progress.done + progress.failed} de {progress.total} · {progress.failed > 0 && <span style={{ color: 'var(--red)' }}>{progress.failed} con error</span>}
-          </div>
-        </div>
-      )}
+      {progress && <CopyProgress progress={progress} />}
 
-      <p className="up-hint">La transferencia va del servidor al almacenamiento en tandas. En carpetas enormes se procesa por partes: si se pausa, vuelve a “Migrar” y continúa con lo que falta (lo ya subido se omite).</p>
+      <p className="up-hint">Azure copia los archivos directo desde SharePoint (no pasan por el servidor web), así aguanta carpetas enormes. Puedes cerrar esta pestaña: las copias siguen en Azure; al volver, "Migrar" retoma y lo ya copiado se omite.</p>
       {msg && <div className={`alert ${msg.ok ? 'alert-ok' : 'alert-error'}`} style={{ marginTop: 8 }}>{msg.text}</div>}
     </div>
   )
@@ -537,28 +562,21 @@ function MediaRemoteSource({ section, destPath, ready }) {
     const todo = (plan?.files || []).filter(f => f.status === 'nuevo')
     if (!todo.length) { setMsg({ ok: false, text: 'No hay archivos nuevos para migrar.' }); return }
     setRunning(true); setMsg(null)
-    let done = 0, failed = 0
-    setProgress({ done, failed, total: todo.length })
-    let queue = [...todo]
+    setProgress({ phase: 'issuing', issued: 0, total: todo.length, done: 0, pending: 0, failed: 0 })
     try {
-      while (queue.length) {
-        const chunk = queue.slice(0, REMOTE_CHUNK)
-        const res = await api.postRemoteMediaBatch({
+      const st = await runCopyMigration({
+        todo,
+        issue: chunk => api.postRemoteMediaBatch({
           section, destPath,
-          items: chunk.map(f => ({ dlUrl: f.dlUrl, blobPath: f.blobPath, name: f.name })),
-        })
-        ;(res.results || []).forEach(r => { if (r.status === 'ok' || r.status === 'existe') done++; else failed++ })
-        const processed = res.processed || 0
-        queue = queue.slice(processed || chunk.length)
-        setProgress({ done, failed, total: todo.length })
-        if (processed === 0) throw new Error('El servidor no pudo procesar la tanda')
-      }
-      setMsg({ ok: failed === 0, text: `Migración completa: ${done} subidos${failed ? `, ${failed} con error` : ''}.` })
+          items: chunk.map(f => ({ driveId: f.driveId, itemId: f.itemId, blobPath: f.blobPath, name: f.name })),
+        }),
+        statusBase: { section, destPath },
+        onProgress: setProgress,
+      })
+      setMsg({ ok: st.failed === 0, text: `Copia completa: ${st.done} de ${st.total}${st.failed ? `, ${st.failed} con error` : ''}.` })
     } catch (e) { setMsg({ ok: false, text: `Se detuvo: ${e.message}. Vuelve a "Migrar" y continúa donde quedó.` }) }
     finally { setRunning(false) }
   }
-
-  const pct = progress && progress.total ? Math.round(((progress.done + progress.failed) / progress.total) * 100) : 0
 
   return (
     <div className="up-remote">
@@ -605,14 +623,9 @@ function MediaRemoteSource({ section, destPath, ready }) {
         </div>
       )}
 
-      {progress && (
-        <div className="up-migrate-progress">
-          <div className="up-progress" style={{ width: '100%' }}><div className="up-progress-bar" style={{ width: `${pct}%` }} /></div>
-          <div className="up-migrate-counts">{progress.done + progress.failed} de {progress.total} · {progress.failed > 0 && <span style={{ color: 'var(--red)' }}>{progress.failed} con error</span>}</div>
-        </div>
-      )}
+      {progress && <CopyProgress progress={progress} />}
 
-      <p className="up-hint">Conserva los nombres y la estructura de subcarpetas tal cual. Va del servidor al almacenamiento en tandas; si se pausa, vuelve a “Migrar” y continúa (lo ya subido se omite).</p>
+      <p className="up-hint">Conserva nombres y estructura de subcarpetas. Azure copia directo desde SharePoint (no pasa por el servidor web); si se pausa, vuelve a “Migrar” y continúa (lo ya copiado se omite).</p>
       {msg && <div className={`alert ${msg.ok ? 'alert-ok' : 'alert-error'}`} style={{ marginTop: 8 }}>{msg.text}</div>}
     </div>
   )

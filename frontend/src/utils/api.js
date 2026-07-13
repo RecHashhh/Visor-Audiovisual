@@ -160,6 +160,8 @@ export const api = {
   // Biblioteca (media) desde SharePoint/OneDrive: conserva nombres y estructura.
   postRemoteMediaPlan:  (payload) => apiFetch('/api/upload/remote/media/plan', { method: 'POST', body: JSON.stringify(payload) }),
   postRemoteMediaBatch: (payload) => apiFetch('/api/upload/remote/media/batch', { method: 'POST', body: JSON.stringify(payload) }),
+  // Estado de las copias servidor-a-servidor (para la barra de progreso).
+  postRemoteCopyStatus: (payload) => apiFetch('/api/upload/remote/copy-status', { method: 'POST', body: JSON.stringify(payload) }),
   postUploadCheck:  (payload)    => apiFetch('/api/upload/check', { method: 'POST', body: JSON.stringify(payload) }),
   getUploadStatus:  (jobId)      => apiFetch(`/api/upload/status/${jobId}`),
   getProjectSettings:   (projectCode) =>

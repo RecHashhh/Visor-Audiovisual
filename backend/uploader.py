@@ -250,6 +250,15 @@ def _graph_list_all(token: str, url: str) -> List[dict]:
     return items
 
 
+def graph_item_download_url(token: str, drive_id: str, item_id: str) -> Optional[str]:
+    """URL de descarga PRE-AUTENTICADA y fresca de un archivo (no necesita token).
+    Es la que Azure Storage puede jalar directo con copy-from-url. Caduca ~1h,
+    por eso se pide justo antes de copiar. La anotación @microsoft.graph.downloadUrl
+    viene por defecto al pedir el item (no se obtiene con $select)."""
+    data = _graph_get(token, f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}")
+    return data.get("@microsoft.graph.downloadUrl")
+
+
 def _graph_download_to_path(
     token: str,
     download_url: str,
@@ -662,6 +671,8 @@ def _preparar_trabajos(
             "nombre_nuevo": nombre_nuevo,
             "blob_path": blob_path,
             "dl_url": dl_url,
+            "drive_id": drive_id,
+            "item_id": item_id,
             "size_bytes": item.get("size", 0),
         })
 

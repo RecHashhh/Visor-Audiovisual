@@ -2603,6 +2603,7 @@ def upload_remote_plan(req: func.HttpRequest) -> func.HttpResponse:
             files.append({
                 "orig": t["nombre_orig"], "name": t["nombre_nuevo"],
                 "blobPath": t["blob_path"], "dlUrl": t["dl_url"],
+                "driveId": t.get("drive_id"), "itemId": t.get("item_id"),
                 "size": int(t.get("size_bytes") or 0),
                 "status": "existe" if exists else "nuevo",
             })
@@ -2615,6 +2616,47 @@ def upload_remote_plan(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as exc:
         logging.error("upload_remote_plan: %s", exc)
         return err(str(exc), 500)
+
+
+def _remote_copy_one(svc, token: str, drive_id: str, item_id: str, blob_path: str):
+    """Lanza la COPIA servidor-a-servidor: pide la URL pre-autenticada fresca y
+    ordena a Azure Storage que jale los bytes directo desde SharePoint. La
+    Function no toca los bytes; devuelve al instante. Estado real → copy-status."""
+    try:
+        url = uploader.graph_item_download_url(token, drive_id, item_id)
+        if not url:
+            return "error", "No se pudo obtener la URL de descarga"
+        bc = svc.get_blob_client(container=CONTAINER, blob=blob_path)
+        bc.start_copy_from_url(url)  # asíncrono: Azure copia en segundo plano
+        return "copiando", None
+    except Exception as exc:
+        return "error", str(exc)
+
+
+def _copy_status_counts(prefix: str, expected: set):
+    """Cuenta cuántos de los blobPaths esperados ya se copiaron, están en curso o
+    fallaron, listando el prefijo con la info de copia (1 sola operación)."""
+    svc = get_blob_service()
+    cc = svc.get_container_client(CONTAINER)
+    done = pending = failed = 0
+    seen = set()
+    for b in cc.list_blobs(name_starts_with=prefix, include=["copy", "metadata"]):
+        if b.name not in expected or _is_dir_marker(b):
+            continue
+        seen.add(b.name)
+        status = None
+        try:
+            status = b.copy.status if b.copy else None
+        except Exception:
+            status = None
+        if status == "pending":
+            pending += 1
+        elif status in ("failed", "aborted"):
+            failed += 1
+        else:                      # 'success' o sin info de copia (blob normal ya presente)
+            done += 1
+    missing = len(expected) - len(seen)   # aún no aparece el blob (copia recién lanzada/erró al lanzar)
+    return {"total": len(expected), "done": done, "pending": pending, "failed": failed, "missing": missing}
 
 
 def _remote_transfer_one(svc, token: str, dl_url: str, blob_path: str, name: str):
@@ -2675,40 +2717,91 @@ def upload_remote_batch(req: func.HttpRequest) -> func.HttpResponse:
     if len(items) > 1000:
         return err("Máximo 1000 ítems por tanda", 400)
 
-    # Los blobPath deben quedar dentro de la carpeta del proyecto; los dlUrl
-    # deben ser de Graph. Evita que el cliente escriba/lea rutas arbitrarias.
+    # Los blobPath deben quedar dentro de la carpeta del proyecto (evita que el
+    # cliente escriba rutas arbitrarias).
     carpeta = uploader._resolve_carpeta(project_code, project_name)
     prefix_ok = f"{carpeta}/"
 
     try:
         svc = get_blob_service()
         token = uploader._get_graph_token()
-        results = []
-        processed = 0
-        started = time.monotonic()
-        for it in items:
-            if time.monotonic() - started > budget:
-                break
-            dl_url    = str((it or {}).get("dlUrl") or "")
-            blob_path = str((it or {}).get("blobPath") or "")
-            name      = str((it or {}).get("name") or os.path.basename(blob_path))
-            if not blob_path.startswith(prefix_ok) or not dl_url.startswith(uploader.GRAPH_BASE):
-                results.append({"blobPath": blob_path, "status": "error", "error": "Ruta u origen no válidos"})
-                processed += 1
-                continue
-            status, error = _remote_transfer_one(svc, token, dl_url, blob_path, name)
-            results.append({"blobPath": blob_path, "status": status, "error": error})
-            processed += 1
-
+        results, processed = _issue_copies(svc, token, items, prefix_ok, budget)
         clear_index_related_cache()
         return ok({
-            "processed": processed,
-            "total": len(items),
-            "done": processed >= len(items),
-            "results": results,
+            "processed": processed, "total": len(items),
+            "done": processed >= len(items), "results": results,
         })
     except Exception as exc:
         logging.error("upload_remote_batch: %s", exc)
+        return err(str(exc), 500)
+
+
+def _issue_copies(svc, token, items, prefix_ok, budget):
+    """Lanza las copias de una tanda (rápido: solo emite órdenes). Devuelve
+    (results, processed). El estado real se consulta luego con copy-status."""
+    results = []
+    processed = 0
+    started = time.monotonic()
+    for it in items:
+        if time.monotonic() - started > budget:
+            break
+        blob_path = str((it or {}).get("blobPath") or "")
+        drive_id  = str((it or {}).get("driveId") or "")
+        item_id   = str((it or {}).get("itemId") or "")
+        if not blob_path.startswith(prefix_ok) or not drive_id or not item_id:
+            results.append({"blobPath": blob_path, "status": "error", "error": "Ruta u origen no válidos"})
+            processed += 1
+            continue
+        status, error = _remote_copy_one(svc, token, drive_id, item_id, blob_path)
+        results.append({"blobPath": blob_path, "status": status, "error": error})
+        processed += 1
+    return results, processed
+
+
+@app.route(route="upload/remote/copy-status", methods=["POST", "OPTIONS"])
+def upload_remote_copy_status(req: func.HttpRequest) -> func.HttpResponse:
+    """Estado de las copias en curso. Body de proyecto: {projectCode, projectName,
+    subfolder?, blobPaths} · Body de media: {section, destPath, blobPaths}."""
+    if req.method == "OPTIONS":
+        return options_ok()
+    try:
+        body = req.get_json()
+    except Exception:
+        return err("Cuerpo JSON inválido", 400)
+
+    blob_paths = body.get("blobPaths") or []
+    if not isinstance(blob_paths, list) or not blob_paths:
+        return err("blobPaths requerido", 400)
+
+    section = (body.get("section") or "").strip().lower()
+    if section:
+        if section not in MEDIA_SECTIONS:
+            return err("Sección de media desconocida", 400)
+        dest = _sanitize_folder_path(body.get("destPath", ""))
+        if not dest:
+            return err("destPath requerido", 400)
+        _, auth_err = require_perms(req, section=section, item=_root_of(dest), cap="manageMedia")
+        if auth_err:
+            return auth_err
+        prefix = f"{_media_root(section)}/{dest}/"
+    else:
+        project_code = (body.get("projectCode") or "").strip()
+        project_name = (body.get("projectName") or "").strip()
+        if not project_code or not project_name:
+            return err("projectCode y projectName son requeridos", 400)
+        _, auth_err = require_perms(req, cap="upload")
+        if auth_err:
+            return auth_err
+        subfolder = _sanitize_folder_path(body.get("subfolder", "")) or ""
+        carpeta = uploader._resolve_carpeta(project_code, project_name)
+        base = f"{carpeta}/{subfolder}" if subfolder else carpeta
+        prefix = f"{base}/"
+
+    try:
+        expected = {str(p) for p in blob_paths if str(p).startswith(prefix)}
+        return ok(_copy_status_counts(prefix, expected))
+    except Exception as exc:
+        logging.error("upload_remote_copy_status: %s", exc)
         return err(str(exc), 500)
 
 
@@ -2794,6 +2887,7 @@ def upload_remote_media_plan(req: func.HttpRequest) -> func.HttpResponse:
             files.append({
                 "orig": name, "name": name, "relDir": rel_clean,
                 "blobPath": blob_path, "dlUrl": dl_url,
+                "driveId": drive_id, "itemId": item_id,
                 "size": int(item.get("size") or 0),
                 "status": "existe" if exists else "nuevo",
             })
@@ -2840,23 +2934,7 @@ def upload_remote_media_batch(req: func.HttpRequest) -> func.HttpResponse:
     try:
         svc = get_blob_service()
         token = uploader._get_graph_token()
-        results = []
-        processed = 0
-        started = time.monotonic()
-        for it in items:
-            if time.monotonic() - started > budget:
-                break
-            dl_url    = str((it or {}).get("dlUrl") or "")
-            blob_path = str((it or {}).get("blobPath") or "")
-            name      = str((it or {}).get("name") or os.path.basename(blob_path))
-            if not blob_path.startswith(prefix_ok) or not dl_url.startswith(uploader.GRAPH_BASE):
-                results.append({"blobPath": blob_path, "status": "error", "error": "Ruta u origen no válidos"})
-                processed += 1
-                continue
-            status, error = _remote_transfer_one(svc, token, dl_url, blob_path, name)
-            results.append({"blobPath": blob_path, "status": status, "error": error})
-            processed += 1
-
+        results, processed = _issue_copies(svc, token, items, prefix_ok, budget)
         return ok({
             "processed": processed, "total": len(items),
             "done": processed >= len(items), "results": results,
