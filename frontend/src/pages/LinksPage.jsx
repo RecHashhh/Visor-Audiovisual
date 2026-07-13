@@ -87,12 +87,20 @@ function fileToThumb(file, max = 900) {
   })
 }
 
-// "instagram.com/ripconciv/" → "@ripconciv"; si no hay handle, el dominio.
+// Segmentos de ruta que NO son el nombre de la cuenta (LinkedIn /company/x,
+// YouTube /channel/x, Facebook /pages/x…): hay que saltarlos para el handle.
+const SKIP_SEG = new Set(['company', 'in', 'school', 'pages', 'channel', 'c', 'user', 'profile.php', 'p'])
+
+// "linkedin.com/company/ripconciv" → "@ripconciv"; si no hay cuenta, el dominio.
 function handleFrom(url, net) {
   try {
     const u = new URL(url)
-    const seg = u.pathname.split('/').filter(Boolean)[0]
-    if (seg && net !== 'website') return '@' + decodeURIComponent(seg).replace(/^@/, '')
+    if (net === 'website') return u.hostname.replace(/^www\./, '')
+    const segs = u.pathname.split('/').filter(Boolean).map(s => decodeURIComponent(s))
+    const at = segs.find(s => s.startsWith('@'))          // YouTube/TikTok @handle
+    if (at) return at
+    const name = segs.find(s => !SKIP_SEG.has(s.toLowerCase()))
+    if (name) return '@' + name.replace(/^@/, '')
     return u.hostname.replace(/^www\./, '')
   } catch { return url }
 }
