@@ -5,6 +5,7 @@
 // kind:
 //   'projects' → carpetas por obra con código + semanas (la sección Proyectos).
 //   'media'    → biblioteca de carpetas libres en el blob (_media/<id>/…).
+//   'links'    → lista de enlaces (redes sociales); sin carpetas, tarjetas preview.
 export const SECTIONS = [
   {
     id: 'proyectos',
@@ -50,9 +51,9 @@ export const SECTIONS = [
     id: 'redes',
     label: 'Redes Sociales',
     path: '/redes',
-    kind: 'media',
+    kind: 'links',
     status: 'active',
-    description: 'Contenido preparado y publicado para Instagram, LinkedIn y más.',
+    description: 'Enlaces oficiales a las redes sociales de la empresa: Instagram, LinkedIn, Facebook y más.',
   },
   {
     id: 'politicas',

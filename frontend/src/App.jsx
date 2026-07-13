@@ -17,6 +17,7 @@ const WeeksPage        = lazy(() => import('./pages/WeeksPage'))
 const GalleryPage      = lazy(() => import('./pages/GalleryPage'))
 const MediaSectionPage = lazy(() => import('./pages/MediaSectionPage'))
 const MediaFolderPage  = lazy(() => import('./pages/MediaFolderPage'))
+const LinksPage        = lazy(() => import('./pages/LinksPage'))
 const SharePage        = lazy(() => import('./pages/SharePage'))
 const UploadPage       = lazy(() => import('./pages/UploadPage'))
 const AccessPage       = lazy(() => import('./pages/AccessPage'))
@@ -56,6 +57,7 @@ function RequireAuth({ children }) {
 }
 
 const mediaSections = SECTIONS.filter(s => s.kind === 'media')
+const linkSections  = SECTIONS.filter(s => s.kind === 'links')
 
 export default function App() {
   const isAuth = useIsAuthenticated()
@@ -113,6 +115,12 @@ export default function App() {
                 <RequireSection section={s.id}><MediaFolderPage sectionId={s.id} /></RequireSection>
               } />
             </Fragment>
+          ))}
+          {/* Secciones de enlaces (Redes Sociales): lista de links, sin carpetas */}
+          {linkSections.map(s => (
+            <Route key={s.id} path={s.path} element={
+              <RequireSection section={s.id}><LinksPage sectionId={s.id} /></RequireSection>
+            } />
           ))}
           {/* Redirect de la ruta de video antigua */}
           <Route path="/videos-corporativos"   element={<Navigate to="/videos" replace />} />

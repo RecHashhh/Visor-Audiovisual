@@ -148,6 +148,10 @@ export const api = {
   // Ficha opcional de una carpeta (descripción, colores, arquetipo).
   saveMediaMeta: (section, folderPath, meta) =>
     apiFetch(`/api/media/${section}/meta`, { method: 'POST', body: JSON.stringify({ folderPath, meta }) }),
+  // Enlaces de una sección (Redes Sociales): lista de links, no carpetas.
+  getSectionLinks:  (section) => apiFetch(`/api/media/${section}/links`),
+  saveSectionLinks: (section, links) =>
+    apiFetch(`/api/media/${section}/links`, { method: 'POST', body: JSON.stringify({ links }) }),
   createShare:      (projectId, week, expiryDays) =>
     apiFetch('/api/share/create', { method: 'POST', body: JSON.stringify({ projectId, week, expiryDays }) }),
   listShares:       ()           => apiFetch('/api/share/list'),

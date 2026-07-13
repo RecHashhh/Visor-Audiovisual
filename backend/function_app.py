@@ -1980,6 +1980,83 @@ def media_folder_meta(req: func.HttpRequest) -> func.HttpResponse:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# ENLACES por sección (p. ej. Redes Sociales): lista de links, no carpetas.
+# GET  /api/media/{section}/links  → { links: [...] }
+# POST /api/media/{section}/links  (manageMedia) → guarda la lista
+# ══════════════════════════════════════════════════════════════════════════════
+def _links_blob_name(section: str) -> str:
+    return f"{CONFIG_PREFIX.strip('/')}/{section}_links.json"
+
+def _detect_network(url: str) -> str:
+    u = (url or "").lower()
+    if "instagram.com" in u: return "instagram"
+    if "facebook.com" in u or "fb.com" in u or "fb.me" in u: return "facebook"
+    if "linkedin.com" in u: return "linkedin"
+    if "youtube.com" in u or "youtu.be" in u: return "youtube"
+    if "tiktok.com" in u: return "tiktok"
+    if "twitter.com" in u or "x.com" in u: return "x"
+    if "wa.me" in u or "whatsapp.com" in u: return "whatsapp"
+    if "t.me" in u or "telegram" in u: return "telegram"
+    return "website"
+
+def _sanitize_link(raw: Any) -> Optional[dict]:
+    if not isinstance(raw, dict):
+        return None
+    url = str(raw.get("url") or "").strip()
+    if not (url.startswith("http://") or url.startswith("https://")) or len(url) > 2000:
+        return None
+    net = str(raw.get("network") or "").strip().lower()
+    if net not in ("instagram", "facebook", "linkedin", "youtube", "tiktok", "x", "whatsapp", "telegram", "website"):
+        net = _detect_network(url)
+    return {
+        "id": (str(raw.get("id") or "").strip() or uuid.uuid4().hex[:10])[:32],
+        "url": url,
+        "title": str(raw.get("title") or "").strip()[:120],
+        "network": net,
+    }
+
+@app.route(route="media/{section}/links", methods=["GET", "POST", "OPTIONS"])
+def media_links(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_ok()
+    section = (req.route_params.get("section") or "").strip().lower()
+    if section not in MEDIA_SECTIONS:
+        return err("Sección de media desconocida", 400)
+
+    if req.method == "POST":
+        _, auth_err = require_perms(req, section=section, cap="manageMedia")
+        if auth_err:
+            return auth_err
+        try:
+            body = req.get_json()
+        except Exception:
+            return err("Cuerpo JSON inválido", 400)
+        raw = body.get("links")
+        if not isinstance(raw, list):
+            return err("links debe ser una lista", 400)
+        if len(raw) > 200:
+            return err("Máximo 200 enlaces", 400)
+        links = [x for x in (_sanitize_link(r) for r in raw) if x]
+        try:
+            save_json_blob(_links_blob_name(section), {"links": links})
+            return ok({"saved": True, "links": links})
+        except Exception as exc:
+            logging.error("media_links save: %s", exc)
+            return err(str(exc), 500)
+
+    perms, auth_err = require_perms(req, section=section)
+    if auth_err:
+        return auth_err
+    try:
+        data = load_json_blob(_links_blob_name(section))
+        links = data.get("links") if isinstance(data, dict) else None
+        return ok({"section": section, "links": links if isinstance(links, list) else []})
+    except Exception as exc:
+        logging.error("media_links load: %s", exc)
+        return err(str(exc), 500)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # POST /api/index/refresh (manual)
 # ══════════════════════════════════════════════════════════════════════════════
 @app.route(route="index/refresh", methods=["POST", "OPTIONS"])

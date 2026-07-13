@@ -750,6 +750,75 @@ code { font-family: var(--font-mono); background: var(--bg3); padding: 2px 6px; 
 .media-folder-name { font-weight: 700; font-size: 1rem; color: var(--text); }
 .media-folder-meta { font-size: 0.78rem; color: var(--text-dim); }
 
+/* ── Redes Sociales: tarjetas de enlace con preview de marca ── */
+.links-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
+}
+.link-card {
+  position: relative;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  transition: border-color var(--transition), box-shadow var(--transition), transform var(--transition);
+}
+.link-card:hover { border-color: var(--border-hi); box-shadow: var(--shadow-lg); transform: translateY(-2px); }
+.link-card-hit { display: block; text-decoration: none; color: inherit; }
+.link-card-banner {
+  height: 96px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+}
+.link-card-glyph svg { width: 42px; height: 42px; display: block; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.18)); }
+.link-card-body { padding: 12px 14px 14px; }
+.link-card-title { font-weight: 700; font-size: 0.98rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.link-card-handle { font-size: 0.82rem; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
+.link-card-actions {
+  position: absolute;
+  top: 8px; right: 8px;
+  display: flex;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity var(--transition);
+}
+.link-card:hover .link-card-actions,
+.link-card:focus-within .link-card-actions { opacity: 1; }
+.link-card-btn {
+  width: 30px; height: 30px;
+  display: flex; align-items: center; justify-content: center;
+  border: none;
+  border-radius: 8px;
+  background: rgba(0,0,0,0.42);
+  color: #fff;
+  cursor: pointer;
+  backdrop-filter: blur(3px);
+}
+.link-card-btn:hover { background: rgba(0,0,0,0.65); }
+.link-card-btn svg { width: 15px; height: 15px; }
+.link-card-skel .skel-banner { height: 96px; border-radius: 0; }
+.link-card-skel .link-card-body { display: flex; flex-direction: column; gap: 8px; }
+
+/* Preview dentro del modal de agregar/editar enlace */
+.link-preview {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px; margin-bottom: 16px;
+  background: var(--bg3);
+  border-radius: var(--radius-lg);
+}
+.link-preview-glyph {
+  width: 48px; height: 48px; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 12px; color: #fff;
+}
+.link-preview-glyph svg { width: 26px; height: 26px; }
+.link-preview-net { font-weight: 700; color: var(--text); }
+.link-preview-handle { font-size: 0.85rem; color: var(--text-dim); }
+.field-opt { font-weight: 400; color: var(--text-faint); }
+
 /* Cabecera de la página de una marca (título + subir) */
 .brand-page-header {
   display: flex;
