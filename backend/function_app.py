@@ -2014,6 +2014,13 @@ def _sanitize_link(raw: Any) -> Optional[dict]:
         "title": str(raw.get("title") or "").strip()[:120],
         "network": net,
     }
+    # Campos opcionales de "mini-perfil" (los escribe el usuario, no son en vivo).
+    desc = str(raw.get("description") or "").strip()[:200]
+    if desc:
+        out["description"] = desc
+    stat = str(raw.get("stat") or "").strip()[:60]
+    if stat:
+        out["stat"] = stat
     # Imagen propia opcional: data URL ya comprimida en el navegador (~<1MB).
     img = raw.get("image")
     if isinstance(img, str) and img.startswith("data:image/") and len(img) <= 3_000_000:

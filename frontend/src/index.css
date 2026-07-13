@@ -750,67 +750,75 @@ code { font-family: var(--font-mono); background: var(--bg3); padding: 2px 6px; 
 .media-folder-name { font-weight: 700; font-size: 1rem; color: var(--text); }
 .media-folder-meta { font-size: 0.78rem; color: var(--text-dim); }
 
-/* ── Redes Sociales: tarjetas de enlace con preview de marca ── */
+/* ── Redes Sociales: tarjetas de enlace (mini-perfil en fila) ── */
 .links-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 14px;
 }
 .link-card {
   position: relative;
   background: var(--bg2);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  overflow: hidden;
   transition: border-color var(--transition), box-shadow var(--transition), transform var(--transition);
 }
-.link-card:hover { border-color: var(--border-hi); box-shadow: var(--shadow-lg); transform: translateY(-2px); }
-.link-card-hit { display: block; text-decoration: none; color: inherit; }
-.link-card-banner {
-  height: 96px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.link-card:hover { border-color: var(--border-hi); box-shadow: var(--shadow); transform: translateY(-1px); }
+.link-card-hit {
+  display: flex; align-items: center; gap: 14px;
+  padding: 14px; text-decoration: none; color: inherit;
+}
+/* Avatar: logo entero (contain sobre blanco) o icono de la red sobre su color */
+.link-card-av {
+  position: relative;
+  width: 56px; height: 56px; flex: none;
+  border-radius: 12px; overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
   color: #fff;
 }
-.link-card-banner.has-img { background-size: cover; background-position: center; position: relative; }
-.link-card-glyph svg { width: 42px; height: 42px; display: block; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.18)); }
-.link-card-badge {
+.link-card-av.has-img { background: #fff; border: 1px solid var(--border); }
+.link-card-av img { width: 100%; height: 100%; object-fit: contain; }
+.link-card-glyph svg { width: 28px; height: 28px; display: block; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.18)); }
+.link-card-av-badge {
   position: absolute;
-  bottom: 8px; left: 8px;
-  width: 30px; height: 30px;
+  right: -3px; bottom: -3px;
+  width: 20px; height: 20px;
   display: flex; align-items: center; justify-content: center;
-  border-radius: 8px; color: #fff;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+  border-radius: 6px; color: #fff;
+  border: 2px solid var(--bg2);
 }
-.link-card-badge svg { width: 17px; height: 17px; }
-.link-card-body { padding: 12px 14px 14px; }
+.link-card-av-badge svg { width: 11px; height: 11px; }
+.link-card-main { min-width: 0; flex: 1; }
 .link-card-title { font-weight: 700; font-size: 0.98rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.link-card-handle { font-size: 0.82rem; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
+.link-card-desc { font-size: 0.82rem; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
+.link-card-handle { font-size: 0.8rem; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
+.link-card-stat { font-size: 0.78rem; color: var(--text-dim); font-weight: 600; margin-top: 4px; }
+.link-card-go { flex: none; color: var(--text-faint); transition: color var(--transition), transform var(--transition); }
+.link-card-go svg { width: 18px; height: 18px; display: block; }
+.link-card:hover .link-card-go { color: var(--accent); transform: translate(1px, -1px); }
 .link-card-actions {
   position: absolute;
   top: 8px; right: 8px;
-  display: flex;
-  gap: 6px;
+  display: flex; gap: 6px;
   opacity: 0;
   transition: opacity var(--transition);
 }
 .link-card:hover .link-card-actions,
 .link-card:focus-within .link-card-actions { opacity: 1; }
 .link-card-btn {
-  width: 30px; height: 30px;
+  width: 28px; height: 28px;
   display: flex; align-items: center; justify-content: center;
-  border: none;
-  border-radius: 8px;
-  background: rgba(0,0,0,0.42);
-  color: #fff;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg2);
+  color: var(--text-dim);
   cursor: pointer;
-  backdrop-filter: blur(3px);
 }
-.link-card-btn:hover { background: rgba(0,0,0,0.65); }
-.link-card-btn svg { width: 15px; height: 15px; }
-.link-card-skel .skel-banner { height: 96px; border-radius: 0; }
-.link-card-skel .link-card-body { display: flex; flex-direction: column; gap: 8px; }
+.link-card-btn:hover { border-color: var(--border-hi); color: var(--text); background: var(--bg3); }
+.link-card-btn svg { width: 14px; height: 14px; }
+.link-card-skel .skel-av { width: 56px; height: 56px; border-radius: 12px; flex: none; }
+.link-card-skel { display: flex; align-items: center; gap: 14px; padding: 14px; }
+.link-card-skel .link-card-main { display: flex; flex-direction: column; gap: 8px; }
 
 /* Preview dentro del modal de agregar/editar enlace */
 .link-preview {
@@ -820,13 +828,18 @@ code { font-family: var(--font-mono); background: var(--bg3); padding: 2px 6px; 
   border-radius: var(--radius-lg);
 }
 .link-preview-glyph {
-  width: 48px; height: 48px; flex: none;
+  width: 52px; height: 52px; flex: none;
   display: flex; align-items: center; justify-content: center;
-  border-radius: 12px; color: #fff;
+  border-radius: 12px; overflow: hidden; color: #fff;
 }
+.link-preview-glyph.has-img { background: #fff; border: 1px solid var(--border); }
+.link-preview-glyph img { width: 100%; height: 100%; object-fit: contain; }
 .link-preview-glyph svg { width: 26px; height: 26px; }
-.link-preview-net { font-weight: 700; color: var(--text); }
-.link-preview-handle { font-size: 0.85rem; color: var(--text-dim); }
+.link-preview-txt { min-width: 0; }
+.link-preview-net { font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.link-preview-desc { font-size: 0.82rem; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.link-preview-handle { font-size: 0.82rem; color: var(--text-faint); }
+.link-preview-stat { font-size: 0.78rem; color: var(--text-dim); font-weight: 600; margin-top: 2px; }
 .field-opt { font-weight: 400; color: var(--text-faint); }
 
 /* Subir imagen propia dentro del modal */

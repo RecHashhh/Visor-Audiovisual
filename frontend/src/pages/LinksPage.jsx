@@ -125,11 +125,11 @@ export default function LinksPage({ sectionId }) {
   }
   useEffect(() => { setLinks(null); load() }, [sectionId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  function openNew() { setFormErr(null); setEditing({ idx: -1, url: '', title: '', network: 'auto', image: '' }) }
+  function openNew() { setFormErr(null); setEditing({ idx: -1, url: '', title: '', description: '', stat: '', network: 'auto', image: '' }) }
   function openEdit(i) {
     const l = links[i]
     setFormErr(null)
-    setEditing({ idx: i, url: l.url, title: l.title || '', network: l.network || 'auto', image: l.image || '' })
+    setEditing({ idx: i, url: l.url, title: l.title || '', description: l.description || '', stat: l.stat || '', network: l.network || 'auto', image: l.image || '' })
   }
 
   async function onPickImage(e) {
@@ -158,7 +158,10 @@ export default function LinksPage({ sectionId }) {
     const url = editing.url.trim()
     if (!/^https?:\/\//i.test(url)) { setFormErr('Pega un enlace válido que empiece por http:// o https://'); return }
     const net = editing.network === 'auto' ? detectNetwork(url) : editing.network
-    const item = { url, title: editing.title.trim(), network: net, image: editing.image || '' }
+    const item = {
+      url, title: editing.title.trim(), network: net, image: editing.image || '',
+      description: editing.description.trim(), stat: editing.stat.trim(),
+    }
     const next = editing.idx >= 0
       ? links.map((l, i) => (i === editing.idx ? { ...l, ...item } : l))
       : [...(links || []), item]
@@ -187,10 +190,10 @@ export default function LinksPage({ sectionId }) {
         <div className="links-grid" aria-hidden="true">
           {Array.from({ length: 3 }).map((_, i) => (
             <div key={i} className="link-card link-card-skel">
-              <div className="skel skel-banner" />
-              <div className="link-card-body">
-                <div className="skel skel-line" style={{ width: '50%' }} />
-                <div className="skel skel-line" style={{ width: '70%' }} />
+              <div className="skel skel-av" />
+              <div className="link-card-main">
+                <div className="skel skel-line" style={{ width: '55%' }} />
+                <div className="skel skel-line" style={{ width: '40%' }} />
               </div>
             </div>
           ))}
@@ -215,19 +218,21 @@ export default function LinksPage({ sectionId }) {
             return (
               <div key={l.id || i} className="link-card">
                 <a className="link-card-hit" href={l.url} target="_blank" rel="noopener noreferrer">
-                  {l.image ? (
-                    <div className="link-card-banner has-img" style={{ backgroundImage: `url(${l.image})` }}>
-                      <span className="link-card-badge" style={{ background: net.color }}><Icon /></span>
-                    </div>
-                  ) : (
-                    <div className="link-card-banner" style={{ background: net.color }}>
-                      <span className="link-card-glyph"><Icon /></span>
-                    </div>
-                  )}
-                  <div className="link-card-body">
-                    <div className="link-card-title">{l.title || net.label}</div>
-                    <div className="link-card-handle">{handleFrom(l.url, l.network)}</div>
+                  <div className={`link-card-av${l.image ? ' has-img' : ''}`} style={l.image ? undefined : { background: net.color }}>
+                    {l.image
+                      ? <img src={l.image} alt="" />
+                      : <span className="link-card-glyph"><Icon /></span>}
+                    {l.image && <span className="link-card-av-badge" style={{ background: net.color }}><Icon /></span>}
                   </div>
+                  <div className="link-card-main">
+                    <div className="link-card-title">{l.title || net.label}</div>
+                    {l.description && <div className="link-card-desc">{l.description}</div>}
+                    <div className="link-card-handle">{handleFrom(l.url, l.network)} · {net.label}</div>
+                    {l.stat && <div className="link-card-stat">{l.stat}</div>}
+                  </div>
+                  <span className="link-card-go" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M7 17 17 7M8 7h9v9" /></svg>
+                  </span>
                 </a>
                 {canManage && (
                   <div className="link-card-actions">
@@ -260,15 +265,19 @@ export default function LinksPage({ sectionId }) {
         {editing && (
           <>
             <div className="link-preview">
-              <span className="link-preview-glyph"
-                style={editing.image
-                  ? { backgroundImage: `url(${editing.image})`, backgroundSize: 'cover', backgroundPosition: 'center' }
-                  : { background: NETWORKS[detected]?.color }}>
-                {!editing.image && (() => { const P = NETWORKS[detected]?.Icon || WebIcon; return <P /> })()}
+              <span className={`link-preview-glyph${editing.image ? ' has-img' : ''}`}
+                style={editing.image ? undefined : { background: NETWORKS[detected]?.color }}>
+                {editing.image
+                  ? <img src={editing.image} alt="" />
+                  : (() => { const P = NETWORKS[detected]?.Icon || WebIcon; return <P /> })()}
               </span>
-              <div>
-                <div className="link-preview-net">{NETWORKS[detected]?.label}</div>
-                <div className="link-preview-handle">{editing.url ? handleFrom(editing.url, detected) : 'vista previa'}</div>
+              <div className="link-preview-txt">
+                <div className="link-preview-net">{editing.title.trim() || NETWORKS[detected]?.label}</div>
+                {editing.description.trim() && <div className="link-preview-desc">{editing.description.trim()}</div>}
+                <div className="link-preview-handle">
+                  {editing.url ? handleFrom(editing.url, detected) : 'vista previa'} · {NETWORKS[detected]?.label}
+                </div>
+                {editing.stat.trim() && <div className="link-preview-stat">{editing.stat.trim()}</div>}
               </div>
             </div>
             <label className="field">
@@ -288,6 +297,23 @@ export default function LinksPage({ sectionId }) {
                 placeholder={NETWORKS[detected]?.label}
                 onChange={e => setEditing({ ...editing, title: e.target.value })}
               />
+            </label>
+            <label className="field">
+              <span className="field-label">Lema o descripción <span className="field-opt">(opcional)</span></span>
+              <input
+                className="field-input" value={editing.description}
+                placeholder="p. ej. Construimos el futuro a paso firme"
+                onChange={e => setEditing({ ...editing, description: e.target.value })}
+              />
+            </label>
+            <label className="field">
+              <span className="field-label">Dato a mostrar <span className="field-opt">(opcional)</span></span>
+              <input
+                className="field-input" value={editing.stat}
+                placeholder="p. ej. 35 mil seguidores"
+                onChange={e => setEditing({ ...editing, stat: e.target.value })}
+              />
+              <span className="field-help">Fijo: tú lo actualizas cuando quieras (no se actualiza solo).</span>
             </label>
             <div className="field">
               <span className="field-label">Imagen propia <span className="field-opt">(opcional)</span></span>
