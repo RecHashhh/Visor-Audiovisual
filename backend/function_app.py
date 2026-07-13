@@ -2635,28 +2635,36 @@ def _remote_copy_one(svc, token: str, drive_id: str, item_id: str, blob_path: st
 
 def _copy_status_counts(prefix: str, expected: set):
     """Cuenta cuántos de los blobPaths esperados ya se copiaron, están en curso o
-    fallaron, listando el prefijo con la info de copia (1 sola operación)."""
+    fallaron (1 sola operación de listado), y devuelve `notDone`: los que aún
+    falta reintentar (no aparecen, o copia fallida). Los 'pending' NO van en
+    notDone (Azure los está copiando)."""
     svc = get_blob_service()
     cc = svc.get_container_client(CONTAINER)
-    done = pending = failed = 0
-    seen = set()
+    present = {}
     for b in cc.list_blobs(name_starts_with=prefix, include=["copy", "metadata"]):
         if b.name not in expected or _is_dir_marker(b):
             continue
-        seen.add(b.name)
-        status = None
         try:
-            status = b.copy.status if b.copy else None
+            present[b.name] = b.copy.status if b.copy else None
         except Exception:
-            status = None
-        if status == "pending":
-            pending += 1
-        elif status in ("failed", "aborted"):
-            failed += 1
-        else:                      # 'success' o sin info de copia (blob normal ya presente)
-            done += 1
-    missing = len(expected) - len(seen)   # aún no aparece el blob (copia recién lanzada/erró al lanzar)
-    return {"total": len(expected), "done": done, "pending": pending, "failed": failed, "missing": missing}
+            present[b.name] = None
+    done = pending = failed = 0
+    not_done = []
+    for p in expected:
+        if p not in present:
+            not_done.append(p)                     # aún no aparece (erró al lanzar / no lanzado)
+        else:
+            status = present[p]
+            if status == "pending":
+                pending += 1
+            elif status in ("failed", "aborted"):
+                failed += 1
+                not_done.append(p)
+            else:                                  # 'success' o sin info = ya está
+                done += 1
+    return {"total": len(expected), "done": done, "pending": pending,
+            "failed": failed, "missing": len(not_done) - failed,
+            "notDone": not_done[:3000]}
 
 
 def _remote_transfer_one(svc, token: str, dl_url: str, blob_path: str, name: str):

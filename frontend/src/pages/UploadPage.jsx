@@ -401,26 +401,43 @@ function UploadStats({ stats }) {
 // (rápido, la Function solo da la orden) y (2) sondea el estado hasta que Azure
 // termina de copiar en segundo plano.
 async function runCopyMigration({ todo, issue, statusBase, onProgress }) {
-  const blobPaths = todo.map(f => f.blobPath)
-  let issued = 0
-  let queue = [...todo]
-  while (queue.length) {
-    const chunk = queue.slice(0, REMOTE_CHUNK)
-    const res = await issue(chunk)
-    const processed = res.processed || 0
-    issued += processed
-    queue = queue.slice(processed || chunk.length)
-    onProgress({ phase: 'issuing', issued, total: todo.length, done: 0, pending: 0, failed: 0 })
-    if (processed === 0) throw new Error('El servidor no pudo lanzar las copias')
+  const byBlob = new Map(todo.map(f => [f.blobPath, f]))
+  const allPaths = todo.map(f => f.blobPath)
+  const sleep = ms => new Promise(r => setTimeout(r, ms))
+  let remaining = [...allPaths]   // los que faltan por copiar bien
+  let round = 0
+
+  while (remaining.length && round < 10) {
+    round++
+    // 1) Lanzar copias de los que faltan, en tandas (con reintento si throttlea).
+    let queue = remaining.map(bp => byBlob.get(bp)).filter(Boolean)
+    let issued = 0
+    while (queue.length) {
+      const chunk = queue.slice(0, REMOTE_CHUNK)
+      let res
+      try {
+        res = await issue(chunk.map(f => ({ driveId: f.driveId, itemId: f.itemId, blobPath: f.blobPath, name: f.name })))
+      } catch { await sleep(15000); continue }   // el request entero falló → esperar y reintentar la tanda
+      const processed = res.processed || chunk.length
+      issued += processed
+      queue = queue.slice(processed)
+      const errs = (res.results || []).filter(r => r.status === 'error').length
+      onProgress({ phase: 'issuing', issued, total: todo.length, done: 0, pending: 0, failed: 0 })
+      if (errs > chunk.length / 2) await sleep(10000)   // muchos errores = throttling → respirar
+    }
+    // 2) Sondear hasta que Azure termine de copiar (los 'pending').
+    let st
+    do {
+      st = await api.postRemoteCopyStatus({ ...statusBase, blobPaths: allPaths })
+      onProgress({ phase: 'copying', total: st.total, done: st.done, pending: st.pending, failed: (st.failed || 0) + (st.missing || 0) })
+      if ((st.pending || 0) > 0) await sleep(3000)
+    } while ((st.pending || 0) > 0)
+    // 3) Lo que no quedó (missing/failed por throttling) se reintenta en la próxima ronda.
+    remaining = (st.notDone || []).filter(bp => byBlob.has(bp))
+    if (remaining.length) await sleep(12000)
   }
-  // Sondeo del estado de las copias (Azure trabaja en segundo plano).
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    const st = await api.postRemoteCopyStatus({ ...statusBase, blobPaths })
-    onProgress({ phase: 'copying', issued, total: st.total, done: st.done, pending: st.pending, failed: (st.failed || 0) + (st.missing || 0) })
-    if ((st.pending || 0) === 0) return { done: st.done, failed: (st.failed || 0) + (st.missing || 0), total: st.total }
-    await new Promise(r => setTimeout(r, 3000))
-  }
+  const done = allPaths.length - remaining.length
+  return { done, failed: remaining.length, total: allPaths.length }
 }
 
 // Análisis REANUDABLE: lista el árbol de SharePoint/OneDrive por tandas acotadas
@@ -515,10 +532,7 @@ function RemoteSource({ source, projectCode, projectName, prefijo, subfolder, re
     try {
       const st = await runCopyMigration({
         todo,
-        issue: chunk => api.postRemoteBatch({
-          projectCode, projectName, subfolder,
-          items: chunk.map(f => ({ driveId: f.driveId, itemId: f.itemId, blobPath: f.blobPath, name: f.name })),
-        }),
+        issue: items => api.postRemoteBatch({ projectCode, projectName, subfolder, items }),
         statusBase: { projectCode, projectName, subfolder },
         onProgress: setProgress,
       })
@@ -616,10 +630,7 @@ function MediaRemoteSource({ section, destPath, ready }) {
     try {
       const st = await runCopyMigration({
         todo,
-        issue: chunk => api.postRemoteMediaBatch({
-          section, destPath,
-          items: chunk.map(f => ({ driveId: f.driveId, itemId: f.itemId, blobPath: f.blobPath, name: f.name })),
-        }),
+        issue: items => api.postRemoteMediaBatch({ section, destPath, items }),
         statusBase: { section, destPath },
         onProgress: setProgress,
       })

@@ -259,8 +259,13 @@ def graph_item_download_url(token: str, drive_id: str, item_id: str) -> Optional
     """URL de descarga PRE-AUTENTICADA y fresca de un archivo (no necesita token).
     Es la que Azure Storage puede jalar directo con copy-from-url. Caduca ~1h,
     por eso se pide justo antes de copiar. La anotación @microsoft.graph.downloadUrl
-    viene por defecto al pedir el item (no se obtiene con $select)."""
-    data = _graph_get(token, f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}")
+    viene por defecto al pedir el item (no se obtiene con $select).
+
+    Reintentos cortos con tope de espera: si Graph throttlea fuerte, falla rápido
+    para que ese archivo quede como 'error' y el batch siga, en vez de quemar el
+    timeout HTTP del request (el usuario reintenta 'Migrar' y se copia luego)."""
+    data = _graph_get(token, f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}",
+                      max_retries=3, max_wait=12)
     return data.get("@microsoft.graph.downloadUrl")
 
 
