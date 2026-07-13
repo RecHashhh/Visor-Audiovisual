@@ -2806,6 +2806,140 @@ def upload_remote_copy_status(req: func.HttpRequest) -> func.HttpResponse:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# ANÁLISIS REANUDABLE (carpetas enormes sin chocar con el timeout/throttling)
+# POST /api/upload/remote/list     → lista una tanda; { files, cursor, done }
+# POST /api/upload/remote/prepare  → arma el plan (blobPath + nuevo/existe) sin Graph
+# ══════════════════════════════════════════════════════════════════════════════
+@app.route(route="upload/remote/list", methods=["POST", "OPTIONS"])
+def upload_remote_list(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_ok()
+    caller = get_caller(req)
+    perms = effective_perms(caller)
+    if not perms["allowed"]:
+        return err("No autorizado", 401 if caller is None else 403)
+    if not (perms.get("caps", {}).get("upload") or perms.get("caps", {}).get("manageMedia")):
+        return err("Sin permiso para subir", 403)
+    try:
+        body = req.get_json()
+    except Exception:
+        return err("Cuerpo JSON inválido", 400)
+
+    budget = min(int(body.get("budgetSeconds") or 120), 180)
+    try:
+        token = uploader._get_graph_token()
+        cursor = body.get("cursor") or {}
+        pending = cursor.get("pending")
+        if not (isinstance(pending, list) and pending):
+            # Primera llamada: resolver el origen y sembrar la raíz.
+            _, base_drive, src_folder = _remote_media_source(body, token)
+            pending = [[uploader.children_url(base_drive, src_folder), ""]]
+        files, remaining = uploader.list_drive_tree_budgeted(token, pending, budget)
+        return ok({
+            "files": files, "found": len(files),
+            "cursor": {"pending": remaining}, "done": len(remaining) == 0,
+        })
+    except ValueError as ve:
+        return err(str(ve), 400)
+    except Exception as exc:
+        logging.error("upload_remote_list: %s", exc)
+        return err(str(exc), 500)
+
+
+@app.route(route="upload/remote/prepare", methods=["POST", "OPTIONS"])
+def upload_remote_prepare(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_ok()
+    try:
+        body = req.get_json()
+    except Exception:
+        return err("Cuerpo JSON inválido", 400)
+
+    files_in = body.get("files") or []
+    if not isinstance(files_in, list):
+        return err("files requerido", 400)
+    if len(files_in) > 20000:
+        return err("Demasiados archivos (máx 20000 por análisis)", 400)
+    destination = (body.get("destination") or "project").strip().lower()
+
+    try:
+        if destination == "media":
+            section = (body.get("section") or "").strip().lower()
+            if section not in MEDIA_SECTIONS:
+                return err("Sección de media desconocida", 400)
+            dest = _sanitize_folder_path(body.get("destPath", ""))
+            if not dest:
+                return err("destPath requerido", 400)
+            _, auth_err = require_perms(req, section=section, item=_root_of(dest), cap="manageMedia")
+            if auth_err:
+                return auth_err
+            base_prefix = f"{_media_root(section)}/{dest}"
+            blob_index = uploader.construir_blob_index(get_blob_service(), prefix=f"{base_prefix}/")
+            files = []
+            nuevos = existentes = total_bytes = 0
+            for f in files_in:
+                name = os.path.basename(str(f.get("name") or "").strip())
+                if not name or name.startswith("."):
+                    continue
+                rel = _sanitize_folder_path(f.get("relDir", "")) or ""
+                blob_path = f"{base_prefix}/{rel}/{name}" if rel else f"{base_prefix}/{name}"
+                exists = blob_path in blob_index
+                if exists:
+                    existentes += 1
+                else:
+                    nuevos += 1
+                    total_bytes += int(f.get("size") or 0)
+                files.append({
+                    "orig": name, "name": name, "blobPath": blob_path,
+                    "driveId": f.get("driveId"), "itemId": f.get("itemId"),
+                    "size": int(f.get("size") or 0), "status": "existe" if exists else "nuevo",
+                })
+            return ok({"total": len(files), "nuevos": nuevos, "existentes": existentes,
+                       "totalBytesNuevos": total_bytes, "files": files})
+
+        # ── destino proyecto: renombra por prefijo/fecha (reusa _preparar_trabajos) ──
+        project_code = (body.get("projectCode") or "").strip()
+        project_name = (body.get("projectName") or "").strip()
+        prefijo = (body.get("prefijo") or "FOT").strip().upper()
+        subfolder = _sanitize_folder_path(body.get("subfolder", ""))
+        if not project_code or not project_name:
+            return err("projectCode y projectName son requeridos", 400)
+        if subfolder is None:
+            return err("Subcarpeta inválida", 400)
+        _, auth_err = require_perms(req, cap="upload")
+        if auth_err:
+            return auth_err
+        carpeta = uploader._resolve_carpeta(project_code, project_name)
+        base = f"{carpeta}/{subfolder}" if subfolder else carpeta
+        items = [{
+            "name": f.get("name", ""), "size": int(f.get("size") or 0),
+            "id": f.get("itemId"), "parentReference": {"driveId": f.get("driveId")},
+            "lastModifiedDateTime": f.get("lastModified"),
+        } for f in files_in]
+        trabajos = uploader._preparar_trabajos(items, base, prefijo)
+        blob_index = uploader.construir_blob_index(get_blob_service(), prefix=f"{base}/")
+        files = []
+        nuevos = existentes = total_bytes = 0
+        for t in trabajos:
+            exists = t["blob_path"] in blob_index
+            if exists:
+                existentes += 1
+            else:
+                nuevos += 1
+                total_bytes += int(t.get("size_bytes") or 0)
+            files.append({
+                "orig": t["nombre_orig"], "name": t["nombre_nuevo"], "blobPath": t["blob_path"],
+                "driveId": t.get("drive_id"), "itemId": t.get("item_id"),
+                "size": int(t.get("size_bytes") or 0), "status": "existe" if exists else "nuevo",
+            })
+        return ok({"total": len(files), "nuevos": nuevos, "existentes": existentes,
+                   "totalBytesNuevos": total_bytes, "files": files})
+    except Exception as exc:
+        logging.error("upload_remote_prepare: %s", exc)
+        return err(str(exc), 500)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # BIBLIOTECA (media) desde SharePoint / OneDrive — conserva nombres y estructura
 # POST /api/upload/remote/media/plan  → lista + calcula rutas destino
 # POST /api/upload/remote/media/batch → transfiere una tanda (omite existentes)

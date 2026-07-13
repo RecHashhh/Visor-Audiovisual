@@ -398,6 +398,47 @@ def graph_drive_base(source: str, site_id: str = "", user_email: str = "") -> st
     return f"{GRAPH_BASE}/sites/{site_id}/drive"
 
 
+def children_url(base_drive_url: str, folder_path: str = "/") -> str:
+    """URL pública para listar los hijos de una carpeta (para sembrar el cursor)."""
+    return _url_children(base_drive_url, folder_path)
+
+
+def list_drive_tree_budgeted(
+    token: str,
+    pending: List[list],
+    budget_s: float = 120.0,
+) -> Tuple[List[dict], List[list]]:
+    """Recorre el árbol de carpetas por LOTES acotados en tiempo, para que el
+    'Analizar' de la web no choque con el timeout HTTP aunque Graph throttlee.
+
+    `pending`: cola BFS [[folder_children_url, rel], ...]. Devuelve
+    (files, remaining): los archivos hallados en esta tanda y la cola que falta.
+    El cliente vuelve a llamar con `remaining` hasta que quede vacía."""
+    files: List[dict] = []
+    pend: List[list] = [list(x) for x in pending]
+    started = time.monotonic()
+    while pend and (time.monotonic() - started) < budget_s:
+        url, rel = pend.pop(0)
+        for item in _graph_list_all(token, url):
+            if "file" in item:
+                pr = item.get("parentReference", {})
+                files.append({
+                    "driveId": pr.get("driveId"),
+                    "itemId": item.get("id"),
+                    "name": item.get("name", ""),
+                    "size": int(item.get("size") or 0),
+                    "relDir": rel,
+                    "lastModified": item.get("lastModifiedDateTime"),
+                })
+            elif "folder" in item:
+                did = item.get("parentReference", {}).get("driveId")
+                iid = item.get("id")
+                if did and iid:
+                    child_rel = f"{rel}/{item.get('name', '')}" if rel else item.get("name", "")
+                    pend.append([f"{GRAPH_BASE}/drives/{did}/items/{iid}/children", child_rel])
+    return files, pend
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # 4. BLOB INDEX — 1 operación de lista en lugar de N blob.exists()
 # ════════════════════════════════════════════════════════════════════════════

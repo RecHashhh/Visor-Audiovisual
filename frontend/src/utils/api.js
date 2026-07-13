@@ -162,6 +162,9 @@ export const api = {
   postRemoteMediaBatch: (payload) => apiFetch('/api/upload/remote/media/batch', { method: 'POST', body: JSON.stringify(payload) }),
   // Estado de las copias servidor-a-servidor (para la barra de progreso).
   postRemoteCopyStatus: (payload) => apiFetch('/api/upload/remote/copy-status', { method: 'POST', body: JSON.stringify(payload) }),
+  // Análisis reanudable de carpetas enormes (no choca con el timeout/throttling).
+  postRemoteList:    (payload) => apiFetch('/api/upload/remote/list', { method: 'POST', body: JSON.stringify(payload) }),
+  postRemotePrepare: (payload) => apiFetch('/api/upload/remote/prepare', { method: 'POST', body: JSON.stringify(payload) }),
   postUploadCheck:  (payload)    => apiFetch('/api/upload/check', { method: 'POST', body: JSON.stringify(payload) }),
   getUploadStatus:  (jobId)      => apiFetch(`/api/upload/status/${jobId}`),
   getProjectSettings:   (projectCode) =>

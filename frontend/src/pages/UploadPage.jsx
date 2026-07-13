@@ -423,6 +423,26 @@ async function runCopyMigration({ todo, issue, statusBase, onProgress }) {
   }
 }
 
+// Análisis REANUDABLE: lista el árbol de SharePoint/OneDrive por tandas acotadas
+// en tiempo (cada llamada vuelve antes del timeout HTTP aunque Graph throttlee),
+// y al final arma el plan (blobPath + nuevo/existe) en una sola llamada sin Graph.
+async function runResumableAnalyze({ listPayload, preparePayload, onCount }) {
+  let cursor
+  let all = []
+  let guard = 0
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const res = await api.postRemoteList(cursor ? { ...listPayload, cursor } : listPayload)
+    all = all.concat(res.files || [])
+    if (onCount) onCount(all.length)
+    if (res.done) break
+    cursor = res.cursor
+    if (!cursor || !cursor.pending || cursor.pending.length === 0) break
+    if (++guard > 5000) throw new Error('El listado es demasiado grande')
+  }
+  return api.postRemotePrepare({ ...preparePayload, files: all })
+}
+
 function CopyProgress({ progress }) {
   const { phase, issued, total, done, pending, failed } = progress
   const pct = total ? Math.round(((phase === 'issuing' ? issued : done) / total) * 100) : 0
@@ -444,18 +464,23 @@ function RemoteSource({ source, projectCode, projectName, prefijo, subfolder, re
   const [odFolder, setOdFolder] = useState('/')
   const [plan, setPlan] = useState(null)
   const [planning, setPlanning] = useState(false)
+  const [count, setCount] = useState(0)
   const [progress, setProgress] = useState(null) // { done, failed, total }
   const [running, setRunning] = useState(false)
   const [msg, setMsg] = useState(null)
 
   async function doPlan() {
     if (!ready) { setMsg({ ok: false, text: 'Elige un proyecto primero.' }); return }
-    setPlanning(true); setMsg(null); setPlan(null); setProgress(null)
+    setPlanning(true); setMsg(null); setPlan(null); setProgress(null); setCount(0)
     try {
-      const payload = { source, projectCode, projectName, prefijo, recursive, subfolder }
-      if (source === 'sharepoint') payload.sharepointUrl = spUrl.trim()
-      else { payload.userEmail = odEmail.trim(); payload.folderPath = odFolder.trim() || '/' }
-      const p = await api.postRemotePlan(payload)
+      const listPayload = { source }
+      if (source === 'sharepoint') listPayload.sharepointUrl = spUrl.trim()
+      else { listPayload.userEmail = odEmail.trim(); listPayload.sourceFolder = odFolder.trim() || '/' }
+      const p = await runResumableAnalyze({
+        listPayload,
+        preparePayload: { destination: 'project', projectCode, projectName, prefijo, subfolder },
+        onCount: setCount,
+      })
       setPlan(p)
       if (p.total === 0) setMsg({ ok: false, text: 'No se encontraron archivos en esa ubicación.' })
     } catch (e) { setMsg({ ok: false, text: `No se pudo analizar: ${e.message}` }) }
@@ -506,7 +531,7 @@ function RemoteSource({ source, projectCode, projectName, prefijo, subfolder, re
 
       <div className="up-pickers" style={{ marginTop: 12 }}>
         <button type="button" className="up-btn-ghost" onClick={doPlan} disabled={planning || running}>
-          {planning ? 'Analizando…' : 'Analizar (contar archivos)'}
+          {planning ? (count ? `Analizando… ${count} encontrados` : 'Analizando…') : 'Analizar (contar archivos)'}
         </button>
         {plan && plan.nuevos > 0 && (
           <button type="button" className="up-btn-primary" onClick={migrate} disabled={running}>
@@ -540,18 +565,23 @@ function MediaRemoteSource({ section, destPath, ready }) {
   const [odFolder, setOdFolder] = useState('/')
   const [plan, setPlan] = useState(null)
   const [planning, setPlanning] = useState(false)
+  const [count, setCount] = useState(0)
   const [progress, setProgress] = useState(null)
   const [running, setRunning] = useState(false)
   const [msg, setMsg] = useState(null)
 
   async function doPlan() {
     if (!ready) { setMsg({ ok: false, text: 'Elige una carpeta destino primero.' }); return }
-    setPlanning(true); setMsg(null); setPlan(null); setProgress(null)
+    setPlanning(true); setMsg(null); setPlan(null); setProgress(null); setCount(0)
     try {
-      const payload = { source: rsource, section, destPath }
-      if (rsource === 'sharepoint') payload.sharepointUrl = spUrl.trim()
-      else { payload.userEmail = odEmail.trim(); payload.sourceFolder = odFolder.trim() || '/' }
-      const p = await api.postRemoteMediaPlan(payload)
+      const listPayload = { source: rsource }
+      if (rsource === 'sharepoint') listPayload.sharepointUrl = spUrl.trim()
+      else { listPayload.userEmail = odEmail.trim(); listPayload.sourceFolder = odFolder.trim() || '/' }
+      const p = await runResumableAnalyze({
+        listPayload,
+        preparePayload: { destination: 'media', section, destPath },
+        onCount: setCount,
+      })
       setPlan(p)
       if (p.total === 0) setMsg({ ok: false, text: 'No se encontraron archivos en esa ubicación.' })
     } catch (e) { setMsg({ ok: false, text: `No se pudo analizar: ${e.message}` }) }
@@ -605,7 +635,7 @@ function MediaRemoteSource({ section, destPath, ready }) {
 
       <div className="up-pickers" style={{ marginTop: 12 }}>
         <button type="button" className="up-btn-ghost" onClick={doPlan} disabled={planning || running}>
-          {planning ? 'Analizando…' : 'Analizar (contar archivos)'}
+          {planning ? (count ? `Analizando… ${count} encontrados` : 'Analizando…') : 'Analizar (contar archivos)'}
         </button>
         {plan && plan.nuevos > 0 && (
           <button type="button" className="up-btn-primary" onClick={migrate} disabled={running}>
