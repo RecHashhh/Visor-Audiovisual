@@ -753,8 +753,8 @@ code { font-family: var(--font-mono); background: var(--bg3); padding: 2px 6px; 
 /* ── Redes Sociales: tarjetas de enlace (mini-perfil en fila) ── */
 .links-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 16px;
 }
 .link-card {
   position: relative;
@@ -765,36 +765,40 @@ code { font-family: var(--font-mono); background: var(--bg3); padding: 2px 6px; 
 }
 .link-card:hover { border-color: var(--border-hi); box-shadow: var(--shadow); transform: translateY(-1px); }
 .link-card-hit {
-  display: flex; align-items: center; gap: 14px;
-  padding: 14px; text-decoration: none; color: inherit;
+  display: flex; align-items: center; gap: 16px;
+  padding: 18px; text-decoration: none; color: inherit;
 }
 /* Avatar: logo entero (contain sobre blanco) o icono de la red sobre su color */
 .link-card-av {
   position: relative;
-  width: 56px; height: 56px; flex: none;
-  border-radius: 12px; overflow: hidden;
+  width: 76px; height: 76px; flex: none;
+  border-radius: 16px; overflow: visible;
   display: flex; align-items: center; justify-content: center;
   color: #fff;
 }
+.link-card-av > img,
+.link-card-av > .link-card-glyph { border-radius: 16px; overflow: hidden; }
 .link-card-av.has-img { background: #fff; border: 1px solid var(--border); }
 .link-card-av img { width: 100%; height: 100%; object-fit: contain; }
-.link-card-glyph svg { width: 28px; height: 28px; display: block; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.18)); }
+.link-card-glyph { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+.link-card-glyph svg { width: 38px; height: 38px; display: block; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.18)); }
 .link-card-av-badge {
   position: absolute;
-  right: -3px; bottom: -3px;
-  width: 20px; height: 20px;
+  right: -6px; bottom: -6px;
+  width: 30px; height: 30px;
   display: flex; align-items: center; justify-content: center;
-  border-radius: 6px; color: #fff;
-  border: 2px solid var(--bg2);
+  border-radius: 9px; color: #fff;
+  border: 3px solid var(--bg2);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.25);
 }
-.link-card-av-badge svg { width: 11px; height: 11px; }
+.link-card-av-badge svg { width: 16px; height: 16px; }
 .link-card-main { min-width: 0; flex: 1; }
-.link-card-title { font-weight: 700; font-size: 0.98rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.link-card-desc { font-size: 0.82rem; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
-.link-card-handle { font-size: 0.8rem; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
-.link-card-stat { font-size: 0.78rem; color: var(--text-dim); font-weight: 600; margin-top: 4px; }
+.link-card-title { font-weight: 700; font-size: 1.1rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.link-card-desc { font-size: 0.86rem; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
+.link-card-handle { font-size: 0.84rem; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 3px; }
+.link-card-stat { font-size: 0.82rem; color: var(--text-dim); font-weight: 600; margin-top: 5px; }
 .link-card-go { flex: none; color: var(--text-faint); transition: color var(--transition), transform var(--transition); }
-.link-card-go svg { width: 18px; height: 18px; display: block; }
+.link-card-go svg { width: 20px; height: 20px; display: block; }
 .link-card:hover .link-card-go { color: var(--accent); transform: translate(1px, -1px); }
 .link-card-actions {
   position: absolute;
@@ -816,8 +820,8 @@ code { font-family: var(--font-mono); background: var(--bg3); padding: 2px 6px; 
 }
 .link-card-btn:hover { border-color: var(--border-hi); color: var(--text); background: var(--bg3); }
 .link-card-btn svg { width: 14px; height: 14px; }
-.link-card-skel .skel-av { width: 56px; height: 56px; border-radius: 12px; flex: none; }
-.link-card-skel { display: flex; align-items: center; gap: 14px; padding: 14px; }
+.link-card-skel .skel-av { width: 76px; height: 76px; border-radius: 16px; flex: none; }
+.link-card-skel { display: flex; align-items: center; gap: 16px; padding: 18px; }
 .link-card-skel .link-card-main { display: flex; flex-direction: column; gap: 8px; }
 
 /* Preview dentro del modal de agregar/editar enlace */
