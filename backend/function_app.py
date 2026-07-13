@@ -2534,8 +2534,12 @@ def upload_resolve_sharepoint(req: func.HttpRequest) -> func.HttpResponse:
 #
 # POST /api/upload/remote/plan  → { carpeta, total, nuevos, existentes, files:[...] }
 # POST /api/upload/remote/batch → procesa una tanda; { processed, results, done }
-# ══════════════════════════════════════════════════════════════════════════════
-_REMOTE_BATCH_BUDGET_S = int(os.environ.get("REMOTE_BATCH_BUDGET_S", "420"))
+#
+# Presupuesto por tanda: DEBE ser menor que el timeout del gateway HTTP de
+# Azure (Functions/SWA cortan el request a ~230s pase lo que pase). Con 420s la
+# tanda se pasaba y Azure mataba la conexion -> 500. 150s deja margen de sobra;
+# la tanda devuelve lo procesado y el frontend continua con lo que falta.
+_REMOTE_BATCH_BUDGET_S = int(os.environ.get("REMOTE_BATCH_BUDGET_S", "150"))
 
 @app.route(route="upload/remote/plan", methods=["POST", "OPTIONS"])
 def upload_remote_plan(req: func.HttpRequest) -> func.HttpResponse:
