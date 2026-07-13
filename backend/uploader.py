@@ -200,7 +200,10 @@ def _resolve_carpeta(project_code: str, project_name: str) -> str:
 
     return f"{code}_{slug}"
 
-def _with_retry(fn: Callable, max_retries: int = GRAPH_MAX_RETRIES):
+def _with_retry(fn: Callable, max_retries: int = GRAPH_MAX_RETRIES, max_wait: Optional[int] = None):
+    """`max_wait`: si Graph pide esperar más que esto (Retry-After grande por
+    throttling), NO esperamos: lanzamos para que el llamador reintente más tarde
+    y no quemar el timeout HTTP. Se usa en el listado reanudable."""
     last_error = None
     for attempt in range(1, max_retries + 1):
         try:
@@ -214,6 +217,8 @@ def _with_retry(fn: Callable, max_retries: int = GRAPH_MAX_RETRIES):
                     if retry_after and retry_after.isdigit()
                     else GRAPH_RETRY_BACKOFF ** attempt
                 )
+                if max_wait is not None and wait > max_wait:
+                    raise RuntimeError(f"throttled: Graph pide esperar {wait}s")
                 log.warning("HTTP %s. Reintento %s/%s en %ss", resp.status_code, attempt, max_retries, wait)
                 time.sleep(wait)
                 continue
@@ -228,23 +233,23 @@ def _with_retry(fn: Callable, max_retries: int = GRAPH_MAX_RETRIES):
     raise RuntimeError(f"Falló tras {max_retries} intentos: {last_error}")
 
 
-def _graph_get(token: str, url: str) -> dict:
+def _graph_get(token: str, url: str, max_retries: int = GRAPH_MAX_RETRIES, max_wait: Optional[int] = None) -> dict:
     def _call():
         return _get_http_session().get(
             url,
             headers={"Authorization": f"Bearer {token}"},
             timeout=(GRAPH_CONNECT_TIMEOUT, GRAPH_READ_TIMEOUT),
         )
-    resp = _with_retry(_call)
+    resp = _with_retry(_call, max_retries=max_retries, max_wait=max_wait)
     resp.raise_for_status()
     return resp.json()
 
 
-def _graph_list_all(token: str, url: str) -> List[dict]:
+def _graph_list_all(token: str, url: str, max_retries: int = GRAPH_MAX_RETRIES, max_wait: Optional[int] = None) -> List[dict]:
     items: List[dict] = []
     next_url: Optional[str] = url
     while next_url:
-        data = _graph_get(token, next_url)
+        data = _graph_get(token, next_url, max_retries=max_retries, max_wait=max_wait)
         items.extend(data.get("value", []))
         next_url = data.get("@odata.nextLink")
     return items
@@ -419,7 +424,15 @@ def list_drive_tree_budgeted(
     started = time.monotonic()
     while pend and (time.monotonic() - started) < budget_s:
         url, rel = pend.pop(0)
-        for item in _graph_list_all(token, url):
+        try:
+            # Reintentos cortos y sin esperas largas: si Graph throttlea fuerte,
+            # devolvemos la carpeta a la cola y cortamos la tanda (el cliente
+            # reintenta luego), en vez de quemar el timeout del request.
+            children = _graph_list_all(token, url, max_retries=3, max_wait=15)
+        except Exception:
+            pend.insert(0, [url, rel])
+            break
+        for item in children:
             if "file" in item:
                 pr = item.get("parentReference", {})
                 files.append({

@@ -430,15 +430,35 @@ async function runResumableAnalyze({ listPayload, preparePayload, onCount }) {
   let cursor
   let all = []
   let guard = 0
+  let stale = 0   // tandas seguidas sin avance (throttling) → esperar progresivamente
+  const sleep = ms => new Promise(r => setTimeout(r, ms))
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    const res = await api.postRemoteList(cursor ? { ...listPayload, cursor } : listPayload)
+    let res
+    try {
+      res = await api.postRemoteList(cursor ? { ...listPayload, cursor } : listPayload)
+    } catch (e) {
+      // Fallo puntual (throttling que agotó): esperar y reintentar la MISMA tanda.
+      stale++
+      if (stale > 20) throw new Error('Microsoft está limitando las consultas (throttling). Espera unos minutos y reintenta "Analizar".')
+      await sleep(Math.min(10000 * stale, 60000))
+      continue
+    }
+    const got = (res.files || []).length
     all = all.concat(res.files || [])
     if (onCount) onCount(all.length)
     if (res.done) break
     cursor = res.cursor
     if (!cursor || !cursor.pending || cursor.pending.length === 0) break
-    if (++guard > 5000) throw new Error('El listado es demasiado grande')
+    if (got === 0) {
+      // Sin avance: Graph está throttleando esa carpeta → esperar antes de seguir.
+      stale++
+      if (stale > 30) throw new Error('Microsoft está limitando las consultas (throttling). Espera unos minutos y reintenta "Analizar".')
+      await sleep(Math.min(8000 * stale, 45000))
+    } else {
+      stale = 0
+    }
+    if (++guard > 20000) throw new Error('El listado es demasiado grande')
   }
   return api.postRemotePrepare({ ...preparePayload, files: all })
 }
