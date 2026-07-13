@@ -416,7 +416,9 @@ async function runCopyMigration({ todo, issue, statusBase, onProgress }) {
       const chunk = queue.slice(0, REMOTE_CHUNK)
       let res
       try {
-        res = await issue(chunk.map(f => ({ driveId: f.driveId, itemId: f.itemId, blobPath: f.blobPath, name: f.name })))
+        // Reusa la dlUrl del Analizar (sin llamar a Graph). En reintentos
+        // (round > 1) pide fresca por si caducó.
+        res = await issue(chunk.map(f => ({ driveId: f.driveId, itemId: f.itemId, blobPath: f.blobPath, name: f.name, dlUrl: f.dlUrl })), round > 1)
       } catch { await sleep(15000); continue }   // el request entero falló → esperar y reintentar la tanda
       const processed = res.processed || chunk.length
       issued += processed
@@ -532,7 +534,7 @@ function RemoteSource({ source, projectCode, projectName, prefijo, subfolder, re
     try {
       const st = await runCopyMigration({
         todo,
-        issue: items => api.postRemoteBatch({ projectCode, projectName, subfolder, items }),
+        issue: (items, refresh) => api.postRemoteBatch({ projectCode, projectName, subfolder, items, refresh }),
         statusBase: { projectCode, projectName, subfolder },
         onProgress: setProgress,
       })
@@ -586,6 +588,7 @@ function RemoteSource({ source, projectCode, projectName, prefijo, subfolder, re
       {progress && <CopyProgress progress={progress} />}
 
       <p className="up-hint">Azure copia los archivos directo desde SharePoint (no pasan por el servidor web), así aguanta carpetas enormes. Puedes cerrar esta pestaña: las copias siguen en Azure; al volver, "Migrar" retoma y lo ya copiado se omite.</p>
+      <p className="up-hint" style={{ color: 'var(--orange)' }}>⚠️ Si esta carpeta es muy pesada (decenas de GB o videos grandes) y la copia puede tardar <strong>más de 1 hora</strong>, es mejor usar el programa del computador: las URLs de descarga de SharePoint caducan a la hora y aquí algunas copias tendrían que reintentarse.</p>
       {msg && <div className={`alert ${msg.ok ? 'alert-ok' : 'alert-error'}`} style={{ marginTop: 8 }}>{msg.text}</div>}
     </div>
   )
@@ -630,7 +633,7 @@ function MediaRemoteSource({ section, destPath, ready }) {
     try {
       const st = await runCopyMigration({
         todo,
-        issue: items => api.postRemoteMediaBatch({ section, destPath, items }),
+        issue: (items, refresh) => api.postRemoteMediaBatch({ section, destPath, items, refresh }),
         statusBase: { section, destPath },
         onProgress: setProgress,
       })
@@ -687,6 +690,7 @@ function MediaRemoteSource({ section, destPath, ready }) {
       {progress && <CopyProgress progress={progress} />}
 
       <p className="up-hint">Conserva nombres y estructura de subcarpetas. Azure copia directo desde SharePoint (no pasa por el servidor web); si se pausa, vuelve a “Migrar” y continúa (lo ya copiado se omite).</p>
+      <p className="up-hint" style={{ color: 'var(--orange)' }}>⚠️ Si es muy pesada (decenas de GB o videos grandes) y puede tardar <strong>más de 1 hora</strong>, mejor usa el programa del computador: las URLs de SharePoint caducan a la hora.</p>
       {msg && <div className={`alert ${msg.ok ? 'alert-ok' : 'alert-error'}`} style={{ marginTop: 8 }}>{msg.text}</div>}
     </div>
   )

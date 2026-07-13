@@ -2618,12 +2618,16 @@ def upload_remote_plan(req: func.HttpRequest) -> func.HttpResponse:
         return err(str(exc), 500)
 
 
-def _remote_copy_one(svc, token: str, drive_id: str, item_id: str, blob_path: str):
-    """Lanza la COPIA servidor-a-servidor: pide la URL pre-autenticada fresca y
-    ordena a Azure Storage que jale los bytes directo desde SharePoint. La
-    Function no toca los bytes; devuelve al instante. Estado real → copy-status."""
+def _remote_copy_one(svc, token: str, drive_id: str, item_id: str, blob_path: str,
+                     dl_url: Optional[str] = None, refresh: bool = False):
+    """Lanza la COPIA servidor-a-servidor: ordena a Azure jalar los bytes directo
+    desde SharePoint. Reusa la URL que ya trajo el Analizar (dl_url) para NO
+    llamar a Graph por archivo (evita ráfagas → throttling). Solo pide una fresca
+    si no hay o si es un reintento (la anterior pudo caducar). Devuelve al instante."""
     try:
-        url = uploader.graph_item_download_url(token, drive_id, item_id)
+        url = None if refresh else dl_url
+        if not url:
+            url = uploader.graph_item_download_url(token, drive_id, item_id)
         if not url:
             return "error", "No se pudo obtener la URL de descarga"
         bc = svc.get_blob_client(container=CONTAINER, blob=blob_path)
@@ -2733,7 +2737,7 @@ def upload_remote_batch(req: func.HttpRequest) -> func.HttpResponse:
     try:
         svc = get_blob_service()
         token = uploader._get_graph_token()
-        results, processed = _issue_copies(svc, token, items, prefix_ok, budget)
+        results, processed = _issue_copies(svc, token, items, prefix_ok, budget, refresh=bool(body.get('refresh')))
         clear_index_related_cache()
         return ok({
             "processed": processed, "total": len(items),
@@ -2744,9 +2748,10 @@ def upload_remote_batch(req: func.HttpRequest) -> func.HttpResponse:
         return err(str(exc), 500)
 
 
-def _issue_copies(svc, token, items, prefix_ok, budget):
+def _issue_copies(svc, token, items, prefix_ok, budget, refresh=False):
     """Lanza las copias de una tanda (rápido: solo emite órdenes). Devuelve
-    (results, processed). El estado real se consulta luego con copy-status."""
+    (results, processed). El estado real se consulta luego con copy-status.
+    `refresh`: pide URL fresca a Graph (para reintentos, si la anterior caducó)."""
     results = []
     processed = 0
     started = time.monotonic()
@@ -2756,11 +2761,12 @@ def _issue_copies(svc, token, items, prefix_ok, budget):
         blob_path = str((it or {}).get("blobPath") or "")
         drive_id  = str((it or {}).get("driveId") or "")
         item_id   = str((it or {}).get("itemId") or "")
+        dl_url    = (it or {}).get("dlUrl")
         if not blob_path.startswith(prefix_ok) or not drive_id or not item_id:
             results.append({"blobPath": blob_path, "status": "error", "error": "Ruta u origen no válidos"})
             processed += 1
             continue
-        status, error = _remote_copy_one(svc, token, drive_id, item_id, blob_path)
+        status, error = _remote_copy_one(svc, token, drive_id, item_id, blob_path, dl_url=dl_url, refresh=refresh)
         results.append({"blobPath": blob_path, "status": status, "error": error})
         processed += 1
     return results, processed
@@ -2900,6 +2906,7 @@ def upload_remote_prepare(req: func.HttpRequest) -> func.HttpResponse:
                 files.append({
                     "orig": name, "name": name, "blobPath": blob_path,
                     "driveId": f.get("driveId"), "itemId": f.get("itemId"),
+                    "dlUrl": f.get("downloadUrl"),
                     "size": int(f.get("size") or 0), "status": "existe" if exists else "nuevo",
                 })
             return ok({"total": len(files), "nuevos": nuevos, "existentes": existentes,
@@ -2926,6 +2933,7 @@ def upload_remote_prepare(req: func.HttpRequest) -> func.HttpResponse:
         } for f in files_in]
         trabajos = uploader._preparar_trabajos(items, base, prefijo)
         blob_index = uploader.construir_blob_index(get_blob_service(), prefix=f"{base}/")
+        dl_by_item = {f.get("itemId"): f.get("downloadUrl") for f in files_in}
         files = []
         nuevos = existentes = total_bytes = 0
         for t in trabajos:
@@ -2938,6 +2946,7 @@ def upload_remote_prepare(req: func.HttpRequest) -> func.HttpResponse:
             files.append({
                 "orig": t["nombre_orig"], "name": t["nombre_nuevo"], "blobPath": t["blob_path"],
                 "driveId": t.get("drive_id"), "itemId": t.get("item_id"),
+                "dlUrl": dl_by_item.get(t.get("item_id")),
                 "size": int(t.get("size_bytes") or 0), "status": "existe" if exists else "nuevo",
             })
         return ok({"total": len(files), "nuevos": nuevos, "existentes": existentes,
@@ -3076,7 +3085,7 @@ def upload_remote_media_batch(req: func.HttpRequest) -> func.HttpResponse:
     try:
         svc = get_blob_service()
         token = uploader._get_graph_token()
-        results, processed = _issue_copies(svc, token, items, prefix_ok, budget)
+        results, processed = _issue_copies(svc, token, items, prefix_ok, budget, refresh=bool(body.get('refresh')))
         return ok({
             "processed": processed, "total": len(items),
             "done": processed >= len(items), "results": results,

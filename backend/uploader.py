@@ -447,6 +447,11 @@ def list_drive_tree_budgeted(
                     "size": int(item.get("size") or 0),
                     "relDir": rel,
                     "lastModified": item.get("lastModifiedDateTime"),
+                    # URL pre-autenticada YA incluida en el listado: se reusa en la
+                    # copia para NO pedir una llamada a Graph por archivo (evita las
+                    # ráfagas que disparan el throttling). Caduca ~1h; si expira, la
+                    # copia falla y el reintento pide una fresca solo para esa.
+                    "downloadUrl": item.get("@microsoft.graph.downloadUrl"),
                 })
             elif "folder" in item:
                 did = item.get("parentReference", {}).get("driveId")
