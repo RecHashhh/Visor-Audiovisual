@@ -12,6 +12,7 @@ import { useAuthz, hasCap } from '../utils/authz'
 import { sectionById } from '../config/sections'
 import Modal from '../components/Modal'
 import FichaModal from '../components/FichaModal'
+import { needsFaststart, playWithMse } from '../utils/smartVideo'
 import { useUploads } from '../utils/uploads'
 import { renderPdfThumb } from '../utils/pdfThumb'
 
@@ -522,6 +523,54 @@ function UploadModal({ open, onClose, sectionId, sectionLabel, folderPath, folde
   )
 }
 
+// Reproductor de video con arranque rápido: si el MP4/MOV tiene el índice al
+// final (lo que hace que el <video> nativo tarde en cargar), usa mp4box + MSE
+// para empezar enseguida sin bajar todo. Si no lo necesita, o si algo falla,
+// cae al <video> nativo — nunca queda peor que antes.
+function SmartVideo({ src, className, onUnsupported }) {
+  const ref = useRef(null)
+  const [mode, setMode] = useState('probe') // 'probe' | 'native' | 'mse'
+  const onUnsupportedRef = useRef(onUnsupported)
+  onUnsupportedRef.current = onUnsupported
+
+  useEffect(() => {
+    let cancelled = false
+    setMode('probe')
+    ;(async () => {
+      let needs = false
+      if ('MediaSource' in window) {
+        try { needs = await needsFaststart(src) } catch { needs = false }
+      }
+      if (!cancelled) setMode(needs ? 'mse' : 'native')
+    })()
+    return () => { cancelled = true }
+  }, [src])
+
+  useEffect(() => {
+    if (mode !== 'mse') return
+    const video = ref.current
+    if (!video) return
+    const cleanup = playWithMse(video, src, {
+      onUnsupported: () => onUnsupportedRef.current?.(),
+      onError: () => setMode('native'),   // respaldo seguro
+    })
+    return cleanup
+  }, [mode, src])
+
+  if (mode === 'probe') return <div className="spinner" />
+  return (
+    <video
+      key={mode}                                   // remonta limpio al caer a nativo
+      ref={ref}
+      src={mode === 'native' ? src : undefined}
+      controls
+      autoPlay
+      className={className}
+      onError={() => { if (mode === 'mse') setMode('native'); else onUnsupportedRef.current?.() }}
+    />
+  )
+}
+
 // Visor universal: abre cualquier archivo en grande según su tipo (imagen,
 // video, audio, PDF, Office vía visor de Microsoft, HTML, texto) y para los
 // que no tienen visor web muestra el archivo con botón de descarga.
@@ -594,7 +643,7 @@ function FileViewer({ files, index, onClose, onMove }) {
   } else if (kind === 'video') {
     body = mediaError
       ? downloadPanel('Este video usa un códec que tu navegador no puede reproducir (p. ej. HEVC, MKV o AVI). Descárgalo para verlo.')
-      : src ? <video src={src} controls autoPlay className="fv-media" onError={() => setMediaError(true)} /> : spinner
+      : src ? <SmartVideo src={src} className="fv-media" onUnsupported={() => setMediaError(true)} /> : spinner
   } else if (kind === 'audio') {
     body = mediaError
       ? downloadPanel('Este audio usa un formato que tu navegador no puede reproducir. Descárgalo para escucharlo.')
