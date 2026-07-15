@@ -8,6 +8,7 @@ import AppShell       from './components/AppShell'
 import { SECTIONS }   from './config/sections'
 import { AuthzProvider, RequireSection, RequireCap } from './utils/authz'
 import { UploadsProvider } from './utils/uploads'
+import { FavoritesProvider } from './utils/favorites'
 
 // Code splitting por página: la carga inicial solo trae el shell + login;
 // cada sección baja su chunk la primera vez que se visita.
@@ -18,6 +19,7 @@ const GalleryPage      = lazy(() => import('./pages/GalleryPage'))
 const MediaSectionPage = lazy(() => import('./pages/MediaSectionPage'))
 const MediaFolderPage  = lazy(() => import('./pages/MediaFolderPage'))
 const LinksPage        = lazy(() => import('./pages/LinksPage'))
+const FavoritesPage    = lazy(() => import('./pages/FavoritesPage'))
 const SharePage        = lazy(() => import('./pages/SharePage'))
 const UploadPage       = lazy(() => import('./pages/UploadPage'))
 const AccessPage       = lazy(() => import('./pages/AccessPage'))
@@ -84,7 +86,9 @@ export default function App() {
           element={
             <RequireAuth>
               <AuthzProvider>
-                <AppShell />
+                <FavoritesProvider>
+                  <AppShell />
+                </FavoritesProvider>
               </AuthzProvider>
             </RequireAuth>
           }
@@ -93,6 +97,9 @@ export default function App() {
 
           <Route path="/proyectos" element={
             <RequireSection section="proyectos"><ProjectsPage /></RequireSection>
+          } />
+          <Route path="/favoritos" element={
+            <RequireSection section="proyectos"><FavoritesPage /></RequireSection>
           } />
           <Route path="/proyectos/project/:id" element={
             <RequireSection section="proyectos"><WeeksPage /></RequireSection>

@@ -44,6 +44,17 @@ export default function Sidebar({ open, onNavigate }) {
           <span className="sidebar-link-label">Inicio</span>
         </NavLink>
 
+        {canSection(me, 'proyectos') && (
+          <NavLink to="/favoritos" onClick={onNavigate} className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
+            <span className="sidebar-link-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 1 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z" />
+              </svg>
+            </span>
+            <span className="sidebar-link-label">Favoritos</span>
+          </NavLink>
+        )}
+
         <div className="sidebar-divider" />
 
         {visibleSections.map(s => (

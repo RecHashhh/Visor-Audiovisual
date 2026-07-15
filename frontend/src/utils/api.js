@@ -154,6 +154,15 @@ export const api = {
     apiFetch(`/api/media/${section}/links`, { method: 'POST', body: JSON.stringify({ links }) }),
   createShare:      (projectId, week, expiryDays) =>
     apiFetch('/api/share/create', { method: 'POST', body: JSON.stringify({ projectId, week, expiryDays }) }),
+
+  // ── Favoritos por usuario (colecciones) ────────────────────────────────────
+  getFavorites:        ()                => apiFetch('/api/favorites'),
+  createFavCollection: (name)            => apiFetch('/api/favorites/collection', { method: 'POST', body: JSON.stringify({ name }) }),
+  renameFavCollection: (cid, name)       => apiFetch(`/api/favorites/collection/${cid}`, { method: 'POST', body: JSON.stringify({ name }) }),
+  deleteFavCollection: (cid)             => apiFetch(`/api/favorites/collection/${cid}`, { method: 'DELETE' }),
+  addFavItem:          (collectionId, item) => apiFetch('/api/favorites/item', { method: 'POST', body: JSON.stringify({ action: 'add', collectionId, ...item }) }),
+  removeFavItem:       (path, collectionId = '') => apiFetch('/api/favorites/item', { method: 'POST', body: JSON.stringify({ action: 'remove', path, collectionId }) }),
+  shareFavCollection:  (cid, expiryDays = 30) => apiFetch(`/api/favorites/collection/${cid}/share`, { method: 'POST', body: JSON.stringify({ expiryDays }) }),
   listShares:       ()           => apiFetch('/api/share/list'),
   revokeShare:      (token)      => apiFetch(`/api/share/${token}`, { method: 'DELETE' }),
   resolveShare:     (token)      => apiFetch(`/api/share/${token}`),

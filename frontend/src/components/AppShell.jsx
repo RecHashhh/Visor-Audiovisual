@@ -9,6 +9,7 @@ import { UploadTray } from '../utils/uploads'
 import { logoutLocal } from '../authConfig'
 
 const ROUTE_TITLES = [
+  ['/favoritos', 'Favoritos'],
   ['/proyectos', 'Proyectos'],
   ['/marcas', 'Marcas'],
   ['/documentos', 'Documentos y Plantillas'],

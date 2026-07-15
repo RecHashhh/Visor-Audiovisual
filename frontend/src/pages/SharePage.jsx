@@ -136,13 +136,17 @@ export default function SharePage() {
       <div style={{ marginBottom:24 }}>
         <div style={{ fontFamily:'var(--font-display)', fontWeight:800, fontSize:'1.4rem', color:'var(--accent)' }}>VISOR AUDIOVISUAL</div>
         <div style={{ fontSize:'0.75rem', color:'var(--text-dim)', marginTop:4 }}>
-          Acceso compartido · Proyecto {data?.projectId} · Semana {data?.week} ·{' '}
+          {data?.type === 'collection'
+            ? <>Colección de favoritos · {files.length} fotos · </>
+            : <>Acceso compartido · Proyecto {data?.projectId} · Semana {data?.week} · </>}
           <span style={{ color:'var(--orange)' }}>Expira: {new Date(data?.expiresAt).toLocaleDateString('es-EC')}</span>
         </div>
       </div>
 
       <h1 style={{ fontFamily:'var(--font-display)', fontSize:'1.1rem', marginBottom:16, color:'var(--text)' }}>
-        {data?.projectName || data?.projectId} / {data?.week}
+        {data?.type === 'collection'
+          ? (data?.title || 'Favoritos')
+          : `${data?.projectName || data?.projectId} / ${data?.week}`}
       </h1>
 
       <div className="gallery-grid">

@@ -3,6 +3,18 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { api } from '../utils/api'
 import { fetchThumb } from '../utils/thumbs'
+import { useFavorites } from '../utils/favorites'
+import Modal from '../components/Modal'
+
+// Corazón (relleno = ya es favorito)
+function HeartIcon({ filled }) {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18"
+      fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 1 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z" />
+    </svg>
+  )
+}
 
 const PREFIX_BADGE = {
   DRN: 'badge-orange', FOT: 'badge-blue', VID: 'badge-red',
@@ -112,6 +124,38 @@ export default function GalleryPage() {
   const lightboxRef = useRef(null)
   const weekLabel = (week || '').split('/').join(' / ')
   const lightboxOpen = Boolean(fullscreenViewer)
+
+  const { isFav, collections, createCollection, addToCollection, removeFromAll } = useFavorites()
+  const [favTarget, setFavTarget] = useState(null)   // archivo a agregar a una colección
+  const [newColName, setNewColName] = useState('')
+  const [favBusy, setFavBusy] = useState(false)
+
+  const onHeart = useCallback((file) => {
+    if (isFav(file.path)) { removeFromAll(file.path).catch(() => {}); return }
+    setNewColName(''); setFavTarget(file)
+  }, [isFav, removeFromAll])
+
+  const addTargetTo = async (collectionId) => {
+    if (!favTarget) return
+    setFavBusy(true)
+    try {
+      await addToCollection(collectionId, {
+        path: favTarget.path, name: favTarget.name,
+        projectCode: id, projectName: id, week: week || '',
+      })
+      setFavTarget(null)
+    } catch {} finally { setFavBusy(false) }
+  }
+
+  const createAndAdd = async () => {
+    const name = newColName.trim()
+    if (!name) return
+    setFavBusy(true)
+    try {
+      const col = await createCollection(name)
+      if (col) await addTargetTo(col.id)
+    } catch {} finally { setFavBusy(false) }
+  }
 
   // Accesibilidad del lightbox: foco inicial dentro, Tab no escapa,
   // y al cerrar el foco vuelve a donde estaba.
@@ -421,6 +465,8 @@ export default function GalleryPage() {
                       getSas={getSas}
                       onClick={() => openItem(file, idx)}
                       active={viewer?.file?.name === file.name}
+                      fav={isFav(file.path)}
+                      onFav={() => onHeart(file)}
                     />
                   ))}
                 </div>
@@ -541,11 +587,45 @@ export default function GalleryPage() {
           )}
         </div>
       )}
+
+      <Modal
+        open={!!favTarget}
+        onClose={() => !favBusy && setFavTarget(null)}
+        title="Agregar a favoritos"
+        subtitle={favTarget?.name}
+        footer={<button className="btn btn-ghost" onClick={() => setFavTarget(null)} disabled={favBusy}>Cerrar</button>}
+      >
+        {collections.length > 0 && (
+          <>
+            <span className="field-label">Elige una colección</span>
+            <div className="fav-col-picklist">
+              {collections.map(c => (
+                <button key={c.id} className="fav-col-pick" disabled={favBusy} onClick={() => addTargetTo(c.id)}>
+                  <span className="fav-col-pick-name">{c.name}</span>
+                  <span className="fav-col-pick-count">{(c.items || []).length}</span>
+                </button>
+              ))}
+            </div>
+            <div className="fav-col-sep">o crea una nueva</div>
+          </>
+        )}
+        <div className="fav-col-new">
+          <input
+            className="field-input" autoFocus value={newColName}
+            placeholder="Nombre de la colección (p. ej. Mejores Puente)"
+            onChange={e => setNewColName(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && newColName.trim() && !favBusy) createAndAdd() }}
+          />
+          <button className="btn btn-primary" disabled={favBusy || !newColName.trim()} onClick={createAndAdd}>
+            {favBusy ? '...' : 'Crear y guardar'}
+          </button>
+        </div>
+      </Modal>
     </>
   )
 }
 
-function GalleryItem({ file, thumbUrl, onThumbLoaded, getSas, onClick, active }) {
+function GalleryItem({ file, thumbUrl, onThumbLoaded, getSas, onClick, active, fav, onFav }) {
   const [loading, setLoading] = useState(false)
   const ref = useRef(null)
   const prefix = prefixOf(file.name)
@@ -598,6 +678,14 @@ function GalleryItem({ file, thumbUrl, onThumbLoaded, getSas, onClick, active })
           {loading && <div className="spinner" style={{ width: 16, height: 16 }} />}
         </div>
       )}
+      <button
+        className={`gallery-fav-btn ${fav ? 'is-fav' : ''}`}
+        title={fav ? 'Quitar de favoritos' : 'Agregar a favoritos'}
+        aria-label={fav ? 'Quitar de favoritos' : 'Agregar a favoritos'}
+        onClick={(e) => { e.stopPropagation(); onFav?.() }}
+      >
+        <HeartIcon filled={fav} />
+      </button>
       <div className={`gallery-item-type badge ${typeColor}`}>{prefix}</div>
       <div className="gallery-item-label">{file.name}</div>
     </div>

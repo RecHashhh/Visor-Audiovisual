@@ -1473,13 +1473,34 @@ def share_resolve(req: func.HttpRequest) -> func.HttpResponse:
     if datetime.now(timezone.utc) > expires_at:
         return err("Enlace expirado", 410)
 
+    remaining = max(int((expires_at - datetime.now(timezone.utc)).total_seconds() / 60), 5)
+
+    # Colección de favoritos: el share lleva una lista explícita de rutas.
+    if share.get("type") == "collection" or isinstance(share.get("files"), list):
+        try:
+            files = []
+            for p in (share.get("files") or []):
+                if not isinstance(p, str):
+                    continue
+                fname = p.split("/")[-1]
+                if not fname or is_marker_file(fname):
+                    continue
+                try:
+                    sas_url = make_sas_url(p, remaining)
+                except Exception:
+                    sas_url = ""
+                files.append({"name": fname, "path": p, "type": type_of(fname), "sasUrl": sas_url})
+            return ok({**share, "files": files})
+        except Exception as exc:
+            logging.error("share_resolve collection: %s", exc)
+            return err(str(exc), 500)
+
     try:
         svc = get_blob_service()
         cc  = svc.get_container_client(CONTAINER)
         project_id = share["projectId"]
         week       = share.get("week", "")
         prefix     = f"{project_id}/{week}/" if week else f"{project_id}/"
-        remaining  = max(int((expires_at - datetime.now(timezone.utc)).total_seconds() / 60), 5)
         files      = []
 
         for blob in cc.list_blobs(name_starts_with=prefix):
@@ -2065,6 +2086,211 @@ def media_links(req: func.HttpRequest) -> func.HttpResponse:
         return ok({"section": section, "links": links if isinstance(links, list) else []})
     except Exception as exc:
         logging.error("media_links load: %s", exc)
+        return err(str(exc), 500)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FAVORITOS por usuario (sección Proyectos): colecciones con nombre + compartir.
+# Cada usuario tiene su propio archivo; solo él ve/gestiona sus favoritos.
+# ══════════════════════════════════════════════════════════════════════════════
+def _safe_user_key(email: str) -> str:
+    e = (email or "anon").strip().lower()
+    key = "".join(c if (c.isalnum() or c in "._-") else "_" for c in e)
+    return key or "anon"
+
+def _favorites_blob_name(email: str) -> str:
+    return f"{CONFIG_PREFIX.strip('/')}/favorites/{_safe_user_key(email)}.json"
+
+def _load_favorites(email: str) -> dict:
+    data = load_json_blob(_favorites_blob_name(email))
+    cols = data.get("collections") if isinstance(data, dict) else None
+    return {"collections": cols if isinstance(cols, list) else []}
+
+def _save_favorites(email: str, data: dict) -> None:
+    save_json_blob(_favorites_blob_name(email), data)
+
+def _fav_all_paths(fav: dict) -> list:
+    seen, out = set(), []
+    for c in fav.get("collections", []):
+        for it in c.get("items", []):
+            p = it.get("path") if isinstance(it, dict) else None
+            if p and p not in seen:
+                seen.add(p); out.append(p)
+    return out
+
+def _fav_caller_email(req) -> str:
+    caller = get_caller(req)
+    return ((caller or {}).get("email") or "anon").strip().lower() or "anon"
+
+def _sanitize_fav_item(raw: Any) -> Optional[dict]:
+    if not isinstance(raw, dict):
+        return None
+    path = str(raw.get("path") or "").strip()
+    if not path:
+        return None
+    return {
+        "path": path,
+        "name": str(raw.get("name") or path.split("/")[-1])[:200],
+        "projectCode": str(raw.get("projectCode") or "")[:80],
+        "projectName": str(raw.get("projectName") or "")[:160],
+        "week": str(raw.get("week") or "")[:40],
+    }
+
+
+@app.route(route="favorites", methods=["GET", "OPTIONS"])
+def favorites_get(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_ok()
+    _, auth_err = require_perms(req, section="proyectos")
+    if auth_err:
+        return auth_err
+    try:
+        fav = _load_favorites(_fav_caller_email(req))
+        return ok({"collections": fav["collections"], "paths": _fav_all_paths(fav)})
+    except Exception as exc:
+        logging.error("favorites_get: %s", exc)
+        return err(str(exc), 500)
+
+
+@app.route(route="favorites/collection", methods=["POST", "OPTIONS"])
+def favorites_collection_create(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_ok()
+    _, auth_err = require_perms(req, section="proyectos")
+    if auth_err:
+        return auth_err
+    try:
+        body = req.get_json()
+        name = str(body.get("name") or "").strip()[:120]
+        if not name:
+            return err("El nombre de la colección es requerido")
+        email = _fav_caller_email(req)
+        fav = _load_favorites(email)
+        if len(fav["collections"]) >= 200:
+            return err("Máximo 200 colecciones")
+        col = {"id": uuid.uuid4().hex[:10], "name": name,
+               "items": [], "createdAt": datetime.now(timezone.utc).isoformat()}
+        fav["collections"].append(col)
+        _save_favorites(email, fav)
+        return ok({"collection": col})
+    except Exception as exc:
+        logging.error("favorites_collection_create: %s", exc)
+        return err(str(exc), 500)
+
+
+@app.route(route="favorites/collection/{cid}", methods=["POST", "DELETE", "OPTIONS"])
+def favorites_collection_edit(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_ok()
+    _, auth_err = require_perms(req, section="proyectos")
+    if auth_err:
+        return auth_err
+    cid = req.route_params.get("cid", "")
+    try:
+        email = _fav_caller_email(req)
+        fav = _load_favorites(email)
+        col = next((c for c in fav["collections"] if c.get("id") == cid), None)
+        if not col:
+            return err("Colección no encontrada", 404)
+        if req.method == "DELETE":
+            fav["collections"] = [c for c in fav["collections"] if c.get("id") != cid]
+            _save_favorites(email, fav)
+            return ok({"deleted": True})
+        body = req.get_json()
+        name = str(body.get("name") or "").strip()[:120]
+        if not name:
+            return err("El nombre es requerido")
+        col["name"] = name
+        _save_favorites(email, fav)
+        return ok({"collection": col})
+    except Exception as exc:
+        logging.error("favorites_collection_edit: %s", exc)
+        return err(str(exc), 500)
+
+
+@app.route(route="favorites/item", methods=["POST", "OPTIONS"])
+def favorites_item(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_ok()
+    try:
+        body = req.get_json()
+    except Exception:
+        return err("Cuerpo JSON inválido", 400)
+    action = str(body.get("action") or "add").strip()
+    path = str(body.get("path") or "").strip()
+    cid = str(body.get("collectionId") or "").strip()
+    if not path:
+        return err("path es requerido")
+
+    # Solo puedes marcar/gestionar favoritos de archivos que tienes permiso de ver.
+    _, auth_err = require_blob_access(req, path)
+    if auth_err:
+        return auth_err
+
+    try:
+        email = _fav_caller_email(req)
+        fav = _load_favorites(email)
+
+        if action == "remove":
+            targets = [c for c in fav["collections"] if (not cid or c.get("id") == cid)]
+            for c in targets:
+                c["items"] = [it for it in c.get("items", []) if it.get("path") != path]
+            _save_favorites(email, fav)
+            return ok({"collections": fav["collections"], "paths": _fav_all_paths(fav)})
+
+        # add
+        item = _sanitize_fav_item(body)
+        if not item:
+            return err("item inválido")
+        col = next((c for c in fav["collections"] if c.get("id") == cid), None)
+        if not col:
+            return err("Colección no encontrada", 404)
+        if not any(it.get("path") == path for it in col.get("items", [])):
+            item["addedAt"] = datetime.now(timezone.utc).isoformat()
+            col.setdefault("items", []).append(item)
+        _save_favorites(email, fav)
+        return ok({"collections": fav["collections"], "paths": _fav_all_paths(fav)})
+    except Exception as exc:
+        logging.error("favorites_item: %s", exc)
+        return err(str(exc), 500)
+
+
+@app.route(route="favorites/collection/{cid}/share", methods=["POST", "OPTIONS"])
+def favorites_collection_share(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_ok()
+    _, auth_err = require_perms(req, section="proyectos", cap="share")
+    if auth_err:
+        return auth_err
+    cid = req.route_params.get("cid", "")
+    try:
+        body = req.get_json() if req.get_body() else {}
+    except Exception:
+        body = {}
+    try:
+        email = _fav_caller_email(req)
+        fav = _load_favorites(email)
+        col = next((c for c in fav["collections"] if c.get("id") == cid), None)
+        if not col:
+            return err("Colección no encontrada", 404)
+        paths = [it.get("path") for it in col.get("items", []) if it.get("path")]
+        if not paths:
+            return err("La colección está vacía")
+
+        expiry_days = min(int(body.get("expiryDays", 30) or 30), 90)
+        token = uuid.uuid4().hex
+        expires_at = datetime.now(timezone.utc) + timedelta(days=expiry_days)
+        origin = req.headers.get("Origin", "")
+        share_data = {
+            "token": token, "type": "collection", "title": col.get("name", "Favoritos"),
+            "files": paths[:2000], "expiresAt": expires_at.isoformat(), "active": True,
+        }
+        save_share(share_data)
+        col["shareToken"] = token
+        _save_favorites(email, fav)
+        return ok({"token": token, "shareUrl": f"{origin}/share/{token}", "expiresAt": expires_at.isoformat()})
+    except Exception as exc:
+        logging.error("favorites_collection_share: %s", exc)
         return err(str(exc), 500)
 
 
