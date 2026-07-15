@@ -2572,3 +2572,45 @@ textarea.field-input { resize: vertical; min-height: 60px; font-family: var(--fo
 .fav-strip-more:hover { border-color: var(--accent); color: var(--accent); }
 .fav-strip-more-plus { font-size: 1.3rem; font-weight: 700; }
 .fav-back { margin-bottom: 12px; }
+
+/* ── Descargas: barra de seleccion + checkbox + toast ── */
+.gallery-selbar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 10px 0 12px;
+}
+.gallery-selbar-count { font-size: 0.85rem; font-weight: 600; color: var(--text); margin-right: 4px; }
+.gallery-item.sel-mode { cursor: pointer; }
+.gallery-item.sel-checked { outline: 3px solid var(--accent); outline-offset: -3px; }
+.gallery-check {
+  position: absolute;
+  top: 6px; right: 6px;
+  width: 26px; height: 26px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%;
+  background: rgba(0,0,0,0.45);
+  border: 2px solid #fff;
+  color: #fff; font-size: 0.85rem; font-weight: 800;
+  z-index: 2;
+}
+.gallery-check.on { background: var(--accent); border-color: var(--accent); }
+
+.dl-toast {
+  position: fixed;
+  left: 20px; bottom: 20px;
+  z-index: var(--z-lightbox);
+  display: flex; align-items: center; gap: 12px;
+  max-width: 340px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  padding: 12px 14px;
+}
+.dl-toast-spin { flex: none; }
+.dl-toast-spin .spinner { width: 22px; height: 22px; }
+.dl-toast-x { flex: none; font-size: 1.3rem; }
+.dl-toast-body { min-width: 0; flex: 1; }
+.dl-toast-title { font-weight: 700; font-size: 0.88rem; color: var(--text); }
+.dl-toast-sub { font-size: 0.76rem; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dl-toast-bar { height: 4px; border-radius: 99px; background: var(--bg3); margin-top: 6px; overflow: hidden; }
+.dl-toast-bar > span { display: block; height: 100%; background: var(--accent); border-radius: 99px; transition: width 0.2s ease; }

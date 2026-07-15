@@ -4,6 +4,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import { api } from '../utils/api'
 import { fetchThumb } from '../utils/thumbs'
 import { useFavorites } from '../utils/favorites'
+import { useDownloads } from '../utils/downloads'
 import Modal from '../components/Modal'
 
 // Corazón (relleno = ya es favorito)
@@ -279,13 +280,26 @@ export default function GalleryPage() {
     }, 180)
   }
 
+  const { downloadSingle, downloadZip, isBusy } = useDownloads()
   const download = async (file) => {
-    const url = await getSas(file.path, 15)
-    try {
-      await downloadAsFile(url, file.name)
-    } catch {
-      window.location.href = url
-    }
+    const url = await getSas(file.path, 30)
+    downloadSingle(url, file.name)   // formato original, con indicador de descarga
+  }
+
+  // Selección múltiple para descargar en ZIP
+  const [selMode, setSelMode] = useState(false)
+  const [selected, setSelected] = useState(() => new Set())
+  const toggleSel = (path) => setSelected(s => { const n = new Set(s); n.has(path) ? n.delete(path) : n.add(path); return n })
+  const exitSel = () => { setSelMode(false); setSelected(new Set()) }
+
+  const downloadSelected = async () => {
+    if (isBusy()) return
+    const chosen = displayFiles.filter(f => selected.has(f.path))
+    if (!chosen.length) return
+    const resolved = await Promise.all(chosen.map(async f => ({ name: f.name, url: await getSas(f.path, 120) })))
+    const wk = (week || '').split('/').pop() || 'fotos'
+    downloadZip(resolved, `${id}_${wk}.zip`)
+    exitSel()
   }
 
   const generateShare = async () => {
@@ -453,6 +467,24 @@ export default function GalleryPage() {
                   </button>
                 </div>
 
+                <div className="gallery-selbar">
+                  {!selMode ? (
+                    <button className="btn btn-ghost btn-sm" onClick={() => setSelMode(true)}>
+                      ☑ Seleccionar para descargar
+                    </button>
+                  ) : (
+                    <>
+                      <span className="gallery-selbar-count">{selected.size} seleccionada{selected.size !== 1 ? 's' : ''}</span>
+                      <button className="btn btn-ghost btn-sm" onClick={() => setSelected(new Set(displayFiles.map(f => f.path)))}>Todo ({displayFiles.length})</button>
+                      <button className="btn btn-ghost btn-sm" onClick={() => setSelected(new Set())}>Ninguno</button>
+                      <button className="btn btn-primary btn-sm" onClick={downloadSelected} disabled={!selected.size || isBusy()}>
+                        Descargar ZIP ({selected.size})
+                      </button>
+                      <button className="btn btn-ghost btn-sm" onClick={exitSel}>Cancelar</button>
+                    </>
+                  )}
+                </div>
+
                 <div className="gallery-grid">
                   {displayFiles.map((file, idx) => (
                     <GalleryItem
@@ -463,10 +495,12 @@ export default function GalleryPage() {
                         setThumbCache((c) => (c[file.path] ? c : { ...c, [file.path]: url }))
                       }}
                       getSas={getSas}
-                      onClick={() => openItem(file, idx)}
+                      onClick={() => (selMode ? toggleSel(file.path) : openItem(file, idx))}
                       active={viewer?.file?.name === file.name}
                       fav={isFav(file.path)}
                       onFav={() => onHeart(file)}
+                      selMode={selMode}
+                      checked={selected.has(file.path)}
                     />
                   ))}
                 </div>
@@ -625,7 +659,7 @@ export default function GalleryPage() {
   )
 }
 
-function GalleryItem({ file, thumbUrl, onThumbLoaded, getSas, onClick, active, fav, onFav }) {
+function GalleryItem({ file, thumbUrl, onThumbLoaded, getSas, onClick, active, fav, onFav, selMode, checked }) {
   const [loading, setLoading] = useState(false)
   const ref = useRef(null)
   const prefix = prefixOf(file.name)
@@ -668,7 +702,7 @@ function GalleryItem({ file, thumbUrl, onThumbLoaded, getSas, onClick, active, f
   const typeColor = PREFIX_BADGE[prefix] || 'badge-dim'
 
   return (
-    <div ref={ref} className={`gallery-item ${active ? 'active' : ''}`} onClick={onClick}>
+    <div ref={ref} className={`gallery-item ${active ? 'active' : ''} ${selMode ? 'sel-mode' : ''} ${selMode && checked ? 'sel-checked' : ''}`} onClick={onClick}>
       {thumbUrl ? (
         <img src={thumbUrl} alt={file.name} loading="lazy" />
       ) : (
@@ -678,14 +712,18 @@ function GalleryItem({ file, thumbUrl, onThumbLoaded, getSas, onClick, active, f
           {loading && <div className="spinner" style={{ width: 16, height: 16 }} />}
         </div>
       )}
-      <button
-        className={`gallery-fav-btn ${fav ? 'is-fav' : ''}`}
-        title={fav ? 'Quitar de favoritos' : 'Agregar a favoritos'}
-        aria-label={fav ? 'Quitar de favoritos' : 'Agregar a favoritos'}
-        onClick={(e) => { e.stopPropagation(); onFav?.() }}
-      >
-        <HeartIcon filled={fav} />
-      </button>
+      {selMode ? (
+        <span className={`gallery-check ${checked ? 'on' : ''}`} aria-hidden="true">{checked ? '✓' : ''}</span>
+      ) : (
+        <button
+          className={`gallery-fav-btn ${fav ? 'is-fav' : ''}`}
+          title={fav ? 'Quitar de favoritos' : 'Agregar a favoritos'}
+          aria-label={fav ? 'Quitar de favoritos' : 'Agregar a favoritos'}
+          onClick={(e) => { e.stopPropagation(); onFav?.() }}
+        >
+          <HeartIcon filled={fav} />
+        </button>
+      )}
       <div className={`gallery-item-type badge ${typeColor}`}>{prefix}</div>
       <div className="gallery-item-label">{file.name}</div>
     </div>

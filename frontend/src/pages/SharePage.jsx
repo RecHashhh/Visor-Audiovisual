@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useParams } from 'react-router-dom'
 import { api } from '../utils/api'
+import { useDownloads } from '../utils/downloads'
 
 const IMG_EXTS  = ['jpg','jpeg','png','tiff','tif','webp']
 const VID_EXTS  = ['mp4','mov','avi']
@@ -77,6 +78,7 @@ async function downloadAsFile(url, filename) {
 
 export default function SharePage() {
   const { token } = useParams()
+  const { downloadSingle, downloadZip, isBusy } = useDownloads()
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -143,11 +145,25 @@ export default function SharePage() {
         </div>
       </div>
 
-      <h1 style={{ fontFamily:'var(--font-display)', fontSize:'1.1rem', marginBottom:16, color:'var(--text)' }}>
-        {data?.type === 'collection'
-          ? (data?.title || 'Favoritos')
-          : `${data?.projectName || data?.projectId} / ${data?.week}`}
-      </h1>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, flexWrap:'wrap', marginBottom:16 }}>
+        <h1 style={{ fontFamily:'var(--font-display)', fontSize:'1.1rem', color:'var(--text)', margin:0 }}>
+          {data?.type === 'collection'
+            ? (data?.title || 'Favoritos')
+            : `${data?.projectName || data?.projectId} / ${data?.week}`}
+        </h1>
+        {files.length > 0 && (
+          <button
+            className="btn btn-primary btn-sm"
+            disabled={isBusy()}
+            onClick={() => downloadZip(
+              files.filter(f => f.sasUrl).map(f => ({ name: f.name, url: f.sasUrl })),
+              `${(data?.type === 'collection' ? (data?.title || 'favoritos') : (data?.projectId || 'compartido'))}.zip`
+            )}
+          >
+            Descargar todo (ZIP · {files.length})
+          </button>
+        )}
+      </div>
 
       <div className="gallery-grid">
         {files.map((file, i) => (
@@ -193,13 +209,8 @@ export default function SharePage() {
               <span className="lightbox-name">{viewer.file.name}</span>
               <button
                 className="btn btn-primary btn-sm"
-                onClick={async () => {
-                  try {
-                    await downloadAsFile(viewer.url, viewer.file.name)
-                  } catch {
-                    window.location.href = viewer.url
-                  }
-                }}
+                disabled={isBusy()}
+                onClick={() => downloadSingle(viewer.url, viewer.file.name)}
               >
                 Descargar
               </button>

@@ -9,6 +9,7 @@ import { SECTIONS }   from './config/sections'
 import { AuthzProvider, RequireSection, RequireCap } from './utils/authz'
 import { UploadsProvider } from './utils/uploads'
 import { FavoritesProvider } from './utils/favorites'
+import { DownloadsProvider } from './utils/downloads'
 
 // Code splitting por página: la carga inicial solo trae el shell + login;
 // cada sección baja su chunk la primera vez que se visita.
@@ -75,6 +76,7 @@ export default function App() {
 
   return (
     <UploadsProvider>
+      <DownloadsProvider>
       <Suspense fallback={<PageLoader />}>
         <Routes>
         {/* Rutas públicas — sin layout */}
@@ -143,6 +145,7 @@ export default function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Suspense>
+      </DownloadsProvider>
     </UploadsProvider>
   )
 }

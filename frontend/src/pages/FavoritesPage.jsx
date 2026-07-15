@@ -7,6 +7,7 @@ import { Link } from 'react-router-dom'
 import { api } from '../utils/api'
 import { fetchThumb } from '../utils/thumbs'
 import { useFavorites } from '../utils/favorites'
+import { useDownloads } from '../utils/downloads'
 import Modal from '../components/Modal'
 
 const IMG_EXTS = ['jpg', 'jpeg', 'png', 'tiff', 'tif', 'webp', 'gif']
@@ -42,6 +43,7 @@ function PhotoTile({ item, onRemove }) {
 
 export default function FavoritesPage() {
   const { collections, loaded, renameCollection, deleteCollection, removeFromCollection, refresh } = useFavorites()
+  const { downloadZip, isBusy } = useDownloads()
   const [viewingId, setViewingId] = useState(null)   // colección abierta en grande (o null = lista)
   const [share, setShare] = useState(null)           // { cid, days, url, loading, error }
   const [copied, setCopied] = useState(false)
@@ -79,10 +81,18 @@ export default function FavoritesPage() {
     if (viewingId === c.id) setViewingId(null)
   }
 
+  const downloadCollection = async (c) => {
+    const items = c.items || []
+    if (!items.length || isBusy()) return
+    const resolved = await Promise.all(items.map(async it => ({ name: it.name, url: (await api.getSasUrl(it.path, 120)).sasUrl })))
+    downloadZip(resolved, `${c.name || 'favoritos'}.zip`)
+  }
+
   // Barra de acciones + panel de compartir, reutilizable en lista y en detalle.
   const Actions = ({ c }) => (
     <div className="fav-col-bar-actions">
       <button className="btn btn-primary btn-sm" onClick={() => openShare(c.id)} disabled={!(c.items || []).length}>Compartir</button>
+      <button className="btn btn-ghost btn-sm" onClick={() => downloadCollection(c)} disabled={!(c.items || []).length || isBusy()}>Descargar ZIP</button>
       <button className="btn btn-ghost btn-sm" onClick={() => setRenaming({ cid: c.id, name: c.name })}>Renombrar</button>
       <button className="btn btn-ghost btn-sm" onClick={() => doDelete(c)}>Eliminar</button>
     </div>
