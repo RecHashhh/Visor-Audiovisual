@@ -1,6 +1,7 @@
 // src/pages/FavoritesPage.jsx
-// Favoritos del usuario: sus colecciones con nombre. Ve las fotos que marcó,
-// comparte cada colección como link (sin login) y puede renombrar/eliminar.
+// Favoritos del usuario: sus colecciones con nombre, una debajo de otra. Cada
+// una muestra una tira de fotos (se desplaza a la derecha) y "Ver todas" abre
+// esa colección sola en grande. Comparte cada colección como link (sin login).
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../utils/api'
@@ -10,6 +11,7 @@ import Modal from '../components/Modal'
 
 const IMG_EXTS = ['jpg', 'jpeg', 'png', 'tiff', 'tif', 'webp', 'gif']
 const isImg = (n) => IMG_EXTS.includes((n.split('.').pop() || '').toLowerCase())
+const STRIP_LIMIT = 12   // cuántas fotos se ven en la tira antes de "Ver todas"
 
 function Thumb({ item }) {
   const [src, setSrc] = useState(null)
@@ -24,31 +26,36 @@ function Thumb({ item }) {
   }, [item.path, item.name])
 
   if (isImg(item.name) && src) return <img src={src} alt={item.name} loading="lazy" />
+  return <div className="fav-thumb-icon"><span>{isImg(item.name) ? (failed ? '🖼️' : '') : '▶'}</span></div>
+}
+
+function PhotoTile({ item, onRemove }) {
   return (
-    <div className="fav-thumb-icon">
-      <span>{isImg(item.name) ? (failed ? '🖼️' : '') : '▶'}</span>
+    <div className="gallery-item fav-item">
+      <Thumb item={item} />
+      <button className="gallery-fav-btn is-fav fav-remove" title="Quitar de esta colección"
+        aria-label="Quitar de esta colección" onClick={onRemove}>×</button>
+      <div className="gallery-item-label">{item.projectCode ? `${item.projectCode} · ` : ''}{item.name}</div>
     </div>
   )
 }
 
 export default function FavoritesPage() {
   const { collections, loaded, renameCollection, deleteCollection, removeFromCollection, refresh } = useFavorites()
-  const [activeId, setActiveId] = useState(null)
-  const [share, setShare] = useState(null)         // { cid, days, url, loading, error }
+  const [viewingId, setViewingId] = useState(null)   // colección abierta en grande (o null = lista)
+  const [share, setShare] = useState(null)           // { cid, days, url, loading, error }
   const [copied, setCopied] = useState(false)
-  const [renaming, setRenaming] = useState(null)   // { cid, name }
+  const [renaming, setRenaming] = useState(null)     // { cid, name }
 
   useEffect(() => { refresh() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  const viewing = useMemo(() => collections.find(c => c.id === viewingId) || null, [collections, viewingId])
   useEffect(() => {
-    if (!activeId && collections.length) setActiveId(collections[0].id)
-    if (activeId && !collections.some(c => c.id === activeId)) setActiveId(collections[0]?.id || null)
-  }, [collections, activeId])
-
-  const active = useMemo(() => collections.find(c => c.id === activeId) || null, [collections, activeId])
+    if (viewingId && !collections.some(c => c.id === viewingId)) setViewingId(null)
+  }, [collections, viewingId])
 
   const openShare = (cid) => setShare({ cid, days: 30, url: null, loading: false, error: null })
-  const setDays = (days) => setShare(s => ({ ...s, days, url: null }))   // cambiar el plazo limpia el link previo
+  const setDays = (days) => setShare(s => ({ ...s, days, url: null }))
   const generate = async () => {
     setShare(s => ({ ...s, loading: true, error: null }))
     try {
@@ -66,11 +73,44 @@ export default function FavoritesPage() {
     await renameCollection(renaming.cid, name)
     setRenaming(null)
   }
-
   const doDelete = async (c) => {
     if (!window.confirm(`¿Eliminar la colección “${c.name}”? (no borra las fotos, solo la colección)`)) return
     await deleteCollection(c.id)
+    if (viewingId === c.id) setViewingId(null)
   }
+
+  // Barra de acciones + panel de compartir, reutilizable en lista y en detalle.
+  const Actions = ({ c }) => (
+    <div className="fav-col-bar-actions">
+      <button className="btn btn-primary btn-sm" onClick={() => openShare(c.id)} disabled={!(c.items || []).length}>Compartir</button>
+      <button className="btn btn-ghost btn-sm" onClick={() => setRenaming({ cid: c.id, name: c.name })}>Renombrar</button>
+      <button className="btn btn-ghost btn-sm" onClick={() => doDelete(c)}>Eliminar</button>
+    </div>
+  )
+  const SharePanel = ({ c }) => (share && share.cid === c.id) ? (
+    <div className="fav-share-box">
+      <div className="fav-share-hint">¿Cuánto quieres que dure el enlace?</div>
+      <div className="fav-share-exp">
+        {[7, 30, 90].map(d => (
+          <button key={d} className={`filter-chip ${share.days === d ? 'active' : ''}`} onClick={() => setDays(d)}>{d} días</button>
+        ))}
+        <button className="btn btn-primary btn-sm" onClick={generate} disabled={share.loading}>
+          {share.loading ? 'Generando…' : (share.url ? 'Generar otro' : 'Generar enlace')}
+        </button>
+        <button className="btn btn-ghost btn-sm" onClick={() => setShare(null)} disabled={share.loading}>Cancelar</button>
+      </div>
+      {share.error && <div className="field-error" style={{ marginTop: 8 }}>{share.error}</div>}
+      {share.url && (
+        <div className="fav-share-row" style={{ marginTop: 10 }}>
+          <div className="fav-share-linkrow">
+            <code>{share.url}</code>
+            <button className="btn btn-primary btn-sm" onClick={() => copy(share.url)}>{copied ? 'Copiado ✓' : 'Copiar'}</button>
+          </div>
+          <span className="fav-share-hint">Enlace público (sin login) · caduca en {share.days} días</span>
+        </div>
+      )}
+    </div>
+  ) : null
 
   return (
     <>
@@ -87,85 +127,70 @@ export default function FavoritesPage() {
         <div className="empty">
           <div className="empty-text">Aún no tienes favoritos</div>
           <p className="access-empty-hint">
-            Entra a un proyecto, pasa el mouse por una foto y toca el ♥ para guardarla en una colección.
-            Luego aparecerán aquí.
+            Entra a un proyecto, pasa el mouse por una foto y toca el ♥ para guardarla en una colección. Luego aparecerán aquí.
           </p>
           <Link className="btn btn-primary" to="/proyectos" style={{ marginTop: 12 }}>Ir a Proyectos</Link>
         </div>
       )}
 
-      {loaded && collections.length > 0 && (
-        <>
-          <div className="fav-col-tabs">
-            {collections.map(c => (
-              <button key={c.id} className={`fav-col-tab ${c.id === activeId ? 'active' : ''}`} onClick={() => setActiveId(c.id)}>
-                {c.name} <span className="fav-col-tab-count">{(c.items || []).length}</span>
-              </button>
-            ))}
+      {/* DETALLE: una colección sola, en grilla completa */}
+      {loaded && viewing && (
+        <div className="fav-detail">
+          <button className="btn btn-ghost btn-sm fav-back" onClick={() => setViewingId(null)}>‹ Todas las colecciones</button>
+          <div className="fav-col-bar">
+            <div className="fav-col-bar-title">{viewing.name} · {(viewing.items || []).length} fotos</div>
+            <Actions c={viewing} />
           </div>
-
-          {active && (
-            <>
-              <div className="fav-col-bar">
-                <div className="fav-col-bar-title">{active.name} · {(active.items || []).length} fotos</div>
-                <div className="fav-col-bar-actions">
-                  <button className="btn btn-primary btn-sm" onClick={() => openShare(active.id)} disabled={!(active.items || []).length}>
-                    Compartir
-                  </button>
-                  <button className="btn btn-ghost btn-sm" onClick={() => setRenaming({ cid: active.id, name: active.name })}>Renombrar</button>
-                  <button className="btn btn-ghost btn-sm" onClick={() => doDelete(active)}>Eliminar</button>
-                </div>
-              </div>
-
-              {share && share.cid === active.id && (
-                <div className="fav-share-box">
-                  <div className="fav-share-hint">¿Cuánto quieres que dure el enlace?</div>
-                  <div className="fav-share-exp">
-                    {[7, 30, 90].map(d => (
-                      <button key={d} className={`filter-chip ${share.days === d ? 'active' : ''}`} onClick={() => setDays(d)}>{d} días</button>
-                    ))}
-                    <button className="btn btn-primary btn-sm" onClick={generate} disabled={share.loading}>
-                      {share.loading ? 'Generando…' : (share.url ? 'Generar otro' : 'Generar enlace')}
-                    </button>
-                    <button className="btn btn-ghost btn-sm" onClick={() => setShare(null)} disabled={share.loading}>Cancelar</button>
-                  </div>
-                  {share.error && <div className="field-error" style={{ marginTop: 8 }}>{share.error}</div>}
-                  {share.url && (
-                    <div className="fav-share-row" style={{ marginTop: 10 }}>
-                      <div className="fav-share-linkrow">
-                        <code>{share.url}</code>
-                        <button className="btn btn-primary btn-sm" onClick={() => copy(share.url)}>{copied ? 'Copiado ✓' : 'Copiar'}</button>
-                      </div>
-                      <span className="fav-share-hint">Enlace público (sin login) · caduca en {share.days} días</span>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {(active.items || []).length === 0 ? (
-                <div className="empty"><div className="empty-text">Esta colección está vacía</div>
-                  <p className="access-empty-hint">Agrega fotos tocando el ♥ dentro de los proyectos.</p></div>
-              ) : (
-                <div className="gallery-grid fav-grid">
-                  {(active.items || []).map(item => (
-                    <div key={item.path} className="gallery-item fav-item">
-                      <Thumb item={item} />
-                      <button
-                        className="gallery-fav-btn is-fav fav-remove"
-                        title="Quitar de esta colección"
-                        aria-label="Quitar de esta colección"
-                        onClick={() => removeFromCollection(active.id, item.path).catch(() => {})}
-                      >×</button>
-                      <div className="gallery-item-label">
-                        {item.projectCode ? `${item.projectCode} · ` : ''}{item.name}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </>
+          <SharePanel c={viewing} />
+          {(viewing.items || []).length === 0 ? (
+            <div className="empty"><div className="empty-text">Esta colección está vacía</div></div>
+          ) : (
+            <div className="gallery-grid fav-grid">
+              {(viewing.items || []).map(item => (
+                <PhotoTile key={item.path} item={item} onRemove={() => removeFromCollection(viewing.id, item.path).catch(() => {})} />
+              ))}
+            </div>
           )}
-        </>
+        </div>
+      )}
+
+      {/* LISTA: colecciones una debajo de otra, con tira horizontal */}
+      {loaded && !viewing && collections.length > 0 && (
+        <div className="fav-sections">
+          {collections.map(c => {
+            const items = c.items || []
+            const strip = items.slice(0, STRIP_LIMIT)
+            const rest = items.length - strip.length
+            return (
+              <section key={c.id} className="fav-section">
+                <div className="fav-col-bar">
+                  <button className="fav-section-title" onClick={() => setViewingId(c.id)} title="Ver todas">
+                    {c.name} <span className="fav-section-count">{items.length} fotos</span>
+                  </button>
+                  <Actions c={c} />
+                </div>
+                <SharePanel c={c} />
+                {items.length === 0 ? (
+                  <div className="fav-section-empty">Colección vacía. Agrega fotos tocando el ♥ dentro de los proyectos.</div>
+                ) : (
+                  <div className="fav-strip">
+                    {strip.map(item => (
+                      <div key={item.path} className="fav-strip-item">
+                        <PhotoTile item={item} onRemove={() => removeFromCollection(c.id, item.path).catch(() => {})} />
+                      </div>
+                    ))}
+                    {rest > 0 && (
+                      <button className="fav-strip-more" onClick={() => setViewingId(c.id)}>
+                        <span className="fav-strip-more-plus">+{rest}</span>
+                        <span>Ver todas</span>
+                      </button>
+                    )}
+                  </div>
+                )}
+              </section>
+            )
+          })}
+        </div>
       )}
 
       <Modal

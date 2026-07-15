@@ -2541,3 +2541,34 @@ textarea.field-input { resize: vertical; min-height: 60px; font-family: var(--fo
   display: flex; align-items: center; justify-content: center;
   background: var(--bg3); color: var(--text-faint); font-size: 1.6rem;
 }
+
+/* Lista vertical de colecciones + tira horizontal de fotos */
+.fav-sections { display: flex; flex-direction: column; gap: 28px; }
+.fav-section { }
+.fav-section-title {
+  background: none; border: none; padding: 0; cursor: pointer;
+  font-weight: 700; font-size: 1.05rem; color: var(--text); text-align: left;
+  transition: color var(--transition);
+}
+.fav-section-title:hover { color: var(--accent); }
+.fav-section-count { font-weight: 500; font-size: 0.82rem; color: var(--text-dim); margin-left: 8px; }
+.fav-section-empty { font-size: 0.85rem; color: var(--text-faint); padding: 6px 0 2px; }
+.fav-strip {
+  display: flex; gap: 12px;
+  overflow-x: auto; overflow-y: hidden;
+  padding-bottom: 8px;
+  scroll-snap-type: x proximity;
+}
+.fav-strip-item { width: 200px; flex: none; scroll-snap-align: start; }
+.fav-strip-item .gallery-item { width: 100%; }
+.fav-strip-more {
+  width: 150px; flex: none; aspect-ratio: 16/10;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  border: 1px dashed var(--border-hi); border-radius: var(--radius);
+  background: var(--bg2); color: var(--text-dim);
+  cursor: pointer; font-size: 0.85rem;
+  transition: border-color var(--transition), color var(--transition);
+}
+.fav-strip-more:hover { border-color: var(--accent); color: var(--accent); }
+.fav-strip-more-plus { font-size: 1.3rem; font-weight: 700; }
+.fav-back { margin-bottom: 12px; }
