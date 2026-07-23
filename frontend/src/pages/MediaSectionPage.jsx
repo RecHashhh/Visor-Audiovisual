@@ -197,7 +197,7 @@ export default function MediaSectionPage({ sectionId }) {
         open={Boolean(pendingDelete)}
         onClose={() => !deleting && setPendingDelete(null)}
         title={pendingDelete ? `Eliminar “${pendingDelete.name}”` : ''}
-        subtitle="Esta acción no se puede deshacer"
+        subtitle="Se puede recuperar durante 7 días"
         footer={<>
           <button className="btn btn-ghost" onClick={() => setPendingDelete(null)} disabled={deleting}>Cancelar</button>
           <button className="btn btn-danger" onClick={removeFolder}
@@ -215,7 +215,10 @@ export default function MediaSectionPage({ sectionId }) {
             </span>
             <input className="field-input" autoFocus value={typed} placeholder={pendingDelete.name}
               onChange={e => setTyped(e.target.value)} />
-            <span className="field-help">Escribe <strong>{pendingDelete.name}</strong> para confirmar.</span>
+            <span className="field-help">
+              Escribe <strong>{pendingDelete.name}</strong> para confirmar. Si te equivocas, quien administra
+              el almacenamiento puede recuperar el contenido desde Azure durante los 7 días siguientes.
+            </span>
             {err && <span className="field-error">{err}</span>}
           </label>
         )}

@@ -778,7 +778,7 @@ function LogoTile({ variant: v, brandName, onOpen, onDelete }) {
           <DownloadIcon />
         </button>
         {onDelete && (
-          <button className="icon-btn icon-btn-danger" onClick={() => onDelete(v)} title="Eliminar" aria-label={`Eliminar ${v.formatLabel}`}>
+          <button className="icon-btn icon-btn-danger tile-del" onClick={() => onDelete(v)} title="Eliminar" aria-label={`Eliminar ${v.formatLabel}`}>
             <TrashIcon />
           </button>
         )}
@@ -809,7 +809,7 @@ function ImageTile({ file: f, onOpen, onDelete }) {
           <DownloadIcon />
         </button>
         {onDelete && (
-          <button className="icon-btn icon-btn-danger" onClick={() => onDelete(f)} title="Eliminar" aria-label={`Eliminar ${f.name}`}>
+          <button className="icon-btn icon-btn-danger tile-del" onClick={() => onDelete(f)} title="Eliminar" aria-label={`Eliminar ${f.name}`}>
             <TrashIcon />
           </button>
         )}
@@ -934,7 +934,7 @@ function FileTile({ file: f, previewPath, onOpen, onDelete }) {
           <DownloadIcon />
         </button>
         {onDelete && (
-          <button className="icon-btn icon-btn-danger" onClick={() => onDelete(f)} title="Eliminar" aria-label={`Eliminar ${name}`}>
+          <button className="icon-btn icon-btn-danger tile-del" onClick={() => onDelete(f)} title="Eliminar" aria-label={`Eliminar ${name}`}>
             <TrashIcon />
           </button>
         )}
@@ -998,7 +998,7 @@ function FontSpecimen({ file: f, onDelete }) {
         </div>
         <button className="btn btn-ghost btn-sm" onClick={() => downloadFile(f.path, f.name.split('/').pop()).catch(() => {})}>Descargar</button>
         {onDelete && (
-          <button className="icon-btn icon-btn-danger" onClick={() => onDelete(f)} title="Eliminar" aria-label={`Eliminar ${name}`}>
+          <button className="icon-btn icon-btn-danger tile-del" onClick={() => onDelete(f)} title="Eliminar" aria-label={`Eliminar ${name}`}>
             <TrashIcon />
           </button>
         )}
@@ -1069,7 +1069,7 @@ function HtmlPreview({ file: f, onDelete }) {
           <DownloadIcon />
         </button>
         {onDelete && (
-          <button className="icon-btn icon-btn-danger" onClick={() => onDelete(f)} title="Eliminar" aria-label={`Eliminar ${name}`}>
+          <button className="icon-btn icon-btn-danger tile-del" onClick={() => onDelete(f)} title="Eliminar" aria-label={`Eliminar ${name}`}>
             <TrashIcon />
           </button>
         )}
@@ -1130,7 +1130,7 @@ function DeleteModal({ target, sectionId, onClose, onDeleted }) {
   return (
     <Modal open onClose={() => !busy && onClose()}
       title={isFolder ? `Eliminar la carpeta “${target.name}”` : `Eliminar “${target.name}”`}
-      subtitle="Esta acción no se puede deshacer"
+      subtitle="Se puede recuperar durante 7 días"
       footer={<>
         <button className="btn btn-ghost" onClick={onClose} disabled={busy}>Cancelar</button>
         <button className="btn btn-danger" onClick={run} disabled={busy || !ready}>
@@ -1146,10 +1146,17 @@ function DeleteModal({ target, sectionId, onClose, onDeleted }) {
           </span>
           <input className="field-input" autoFocus value={typed} placeholder={target.name}
             onChange={e => setTyped(e.target.value)} />
-          <span className="field-help">Escribe <strong>{target.name}</strong> para confirmar.</span>
+          <span className="field-help">
+            Escribe <strong>{target.name}</strong> para confirmar. Si te equivocas, quien administra
+            el almacenamiento puede recuperar el contenido desde Azure durante los 7 días siguientes.
+          </span>
         </label>
       ) : (
-        <p className="field-help">El archivo se borrará del almacenamiento y dejará de estar disponible para todo el mundo.</p>
+        <p className="field-help">
+          El archivo dejará de estar disponible para todo el mundo. Si es un error, quien
+          administra el almacenamiento puede recuperarlo desde Azure durante los 7 días
+          siguientes (retención configurada en la cuenta).
+        </p>
       )}
       {err && <span className="field-error">{err}</span>}
     </Modal>

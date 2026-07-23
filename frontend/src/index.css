@@ -2660,3 +2660,17 @@ textarea.field-input { resize: vertical; min-height: 60px; font-family: var(--fo
 /* Variante de peligro para un botón de texto (p. ej. "Eliminar carpeta") */
 .btn-danger-ghost { color: var(--red); }
 .btn-danger-ghost:hover { border-color: var(--red); background: var(--red-bg); }
+
+/* La papelera de un archivo queda junto al botón de descargar, que se usa a
+   diario: la separo y la revelo al apuntar la tarjeta para que no se pulse sin
+   querer. El borrado sigue pidiendo confirmación de todas formas. */
+.tile-del { opacity: 0; transition: opacity 0.15s ease; }
+/* La de carpeta va posicionada en absoluto: el margen solo aplica a las de tile. */
+.tile-del:not(.tile-del-folder) { margin-left: 6px; }
+.media-img-tile:hover .tile-del,
+.logo-tile:hover .tile-del,
+.typo-card:hover .tile-del,
+.html-card:hover .tile-del,
+.tile-del:focus-visible { opacity: 1; }
+/* Sin hover (táctil) no habría forma de llegar al botón. */
+@media (hover: none) { .tile-del { opacity: 1; } }
