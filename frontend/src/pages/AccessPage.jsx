@@ -4,21 +4,22 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../utils/api'
 import { useAuthz } from '../utils/authz'
-import { SECTIONS } from '../config/sections'
+import { useSections } from '../utils/sections'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 // Presets de capacidades por rol (espejo del backend). Los roles son atajos:
 // después se puede activar/desactivar cada capacidad manualmente.
 const ROLE_CAPS = {
-  admin:    { upload: true,  manageMedia: true,  share: true,  refreshIndex: true,  manageAccess: true },
-  operador: { upload: true,  manageMedia: true,  share: true,  refreshIndex: true,  manageAccess: false },
-  viewer:   { upload: false, manageMedia: false, share: false, refreshIndex: false, manageAccess: false },
+  admin:    { upload: true,  manageMedia: true,  deleteMedia: true,  share: true,  refreshIndex: true,  manageAccess: true },
+  operador: { upload: true,  manageMedia: true,  deleteMedia: false, share: true,  refreshIndex: true,  manageAccess: false },
+  viewer:   { upload: false, manageMedia: false, deleteMedia: false, share: false, refreshIndex: false, manageAccess: false },
 }
 const ROLE_LABEL = { admin: 'Administrador', operador: 'Operador', viewer: 'Visualizador' }
 const CAP_META = [
   { key: 'upload',       label: 'Subir material a proyectos' },
   { key: 'manageMedia',  label: 'Crear y subir en Marcas, Documentos y demás secciones' },
+  { key: 'deleteMedia',  label: 'Eliminar archivos y carpetas de esas secciones (no aplica a Proyectos)' },
   { key: 'share',        label: 'Generar y revocar enlaces externos' },
   { key: 'refreshIndex', label: 'Refrescar el índice de proyectos' },
   { key: 'manageAccess', label: 'Gestionar accesos (usuarios, roles y permisos)' },
@@ -64,9 +65,9 @@ export default function AccessPage() {
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState(null)
   const [newEmail, setNewEmail] = useState('')
+  const { sections, mediaSections } = useSections()
 
   useEffect(() => {
-    const mediaSections = SECTIONS.filter(s => s.kind === 'media')
     Promise.all([
       api.getAccessConfig(),
       api.getProjects().catch(() => []),
@@ -344,7 +345,7 @@ function UserRow({ user: u, isSelf, sectionItems, onPatch, onSetRole, onToggleCa
                       Marca la casilla de cada sección que <strong>sí</strong> puede ver. Haz clic en el nombre para elegir carpetas concretas.
                     </p>
                     <div className="access-seclist">
-                      {SECTIONS.map(s => {
+                      {sections.map(s => {
                         const active = Array.isArray(u.sections) && u.sections.includes(s.id)
                         const scope = u.scopes[s.id]
                         const items = sectionItems[s.id] || []

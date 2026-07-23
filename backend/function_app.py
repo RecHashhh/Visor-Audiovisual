@@ -46,6 +46,11 @@ CONFIG_PREFIX = os.environ.get("CONFIG_PREFIX", "_config")
 # Biblioteca de contenido por sección (marcas, documentos, videos...), separada
 # de las carpetas de proyectos: _media/<seccion>/<carpeta>/<archivos>
 MEDIA_PREFIX = os.environ.get("MEDIA_PREFIX", "_media")
+# Miniaturas precalculadas para formatos que este backend no sabe rasterizar
+# (Word, PowerPoint, Excel, CAD…): _thumbs/<ruta del archivo>.jpg. Las genera
+# quien sube el material (ver ripcon_av_uploader.ipynb); si no existe, el
+# frontend se queda con el ícono de tipo.
+THUMBS_PREFIX = os.environ.get("THUMBS_PREFIX", "_thumbs")
 
 # ── Identidad y accesos ────────────────────────────────────────────────────
 # AUTH_MODE: "lax" (por defecto) decodifica los claims y verifica tenant + expiración,
@@ -363,11 +368,13 @@ def should_skip_for_content_index(blob_name: str) -> bool:
     index_prefix = f"{INDEX_PREFIX.strip('/')}/"
     config_prefix = f"{CONFIG_PREFIX.strip('/')}/"
     media_prefix = f"{MEDIA_PREFIX.strip('/')}/"
+    thumbs_prefix = f"{THUMBS_PREFIX.strip('/')}/"
     return (
         blob_name.startswith(shares_prefix)
         or blob_name.startswith(index_prefix)
         or blob_name.startswith(config_prefix)
         or blob_name.startswith(media_prefix)
+        or blob_name.startswith(thumbs_prefix)
     )
 
 def load_json_blob(blob_name: str) -> Optional[Any]:
@@ -533,6 +540,21 @@ def refresh_content_indexes() -> Dict[str, int]:
         "filesIndexes": len(payloads["filesByProjectWeek"]),
     }
 
+# Extensiones que Pillow puede rasterizar directamente desde el original.
+THUMBABLE_IMAGE_EXT = ("jpg", "jpeg", "png", "webp", "tif", "tiff")
+
+def thumb_sidecar_name(blob_path: str) -> str:
+    """Ruta de la miniatura precalculada de un archivo no-imagen.
+    _media/documentos/Plantillas/informe.docx → _thumbs/_media/documentos/Plantillas/informe.docx.jpg"""
+    return f"{THUMBS_PREFIX.strip('/')}/{blob_path.strip('/')}.jpg"
+
+def blob_exists(blob_name: str) -> bool:
+    try:
+        svc = get_blob_service()
+        return svc.get_blob_client(container=CONTAINER, blob=blob_name).exists()
+    except Exception:
+        return False
+
 def build_thumbnail_bytes(raw_bytes: bytes, max_width: int = 480, quality: int = 72,
                           trim: bool = False):
     """Devuelve (bytes, content_type). Con trim=True recorta el arte al contenido
@@ -579,12 +601,127 @@ def build_thumbnail_bytes(raw_bytes: bytes, max_width: int = 480, quality: int =
 
 # La sección de material audiovisual de obra se llama "proyectos" (id = etiqueta,
 # coherente). "material" es un alias histórico que se normaliza a "proyectos".
-KNOWN_SECTIONS = ["proyectos", "marcas", "documentos", "videos", "eventos", "redes", "politicas"]
 SECTION_ALIASES = {"material": "proyectos"}
 ROLES = ("admin", "operador", "viewer")
 
 def canon_section(s: str) -> str:
     return SECTION_ALIASES.get(s, s)
+
+
+# ── CATÁLOGO DE SECCIONES ──────────────────────────────────────────────────
+# Qué secciones existen en el hub lo decide el administrador desde la página
+# "Secciones" y se guarda en {CONFIG_PREFIX}/sections.json. Esta lista es el
+# valor inicial (primer arranque) y el fallback si el blob falta o está roto.
+#
+# kind: 'projects' → obras con semanas (lógica propia, sección única y fija)
+#       'media'    → biblioteca de carpetas libres en _media/<id>/
+#       'links'    → lista de enlaces, sin carpetas
+SECTION_KINDS = ("projects", "media", "links")
+# La sección de obras no se puede borrar ni cambiar de tipo: sus rutas, su
+# índice y sus permisos están cableados aparte del resto.
+PROTECTED_SECTION = "proyectos"
+
+DEFAULT_SECTIONS = [
+    {"id": "proyectos", "label": "Proyectos", "kind": "projects", "icon": "proyectos",
+     "description": "Todo el material audiovisual de cada obra: fotos, dron, video y 360° organizados por proyecto y semana."},
+    {"id": "marcas", "label": "Marcas", "kind": "media", "icon": "marcas",
+     "description": "Arquetipo, personalidad y variantes descargables de cada marca del grupo RIPCON, filtrables por fondo, color y formato."},
+    {"id": "documentos", "label": "Documentos y Plantillas", "kind": "media", "icon": "documentos",
+     "description": "Plantillas de marca, papelería, presentaciones y manuales listos para usar."},
+    {"id": "videos", "label": "Videos Corporativos", "kind": "media", "icon": "videos",
+     "description": "Institucionales y spots de la empresa, independientes de cada obra."},
+    {"id": "eventos", "label": "Fotografía de Eventos", "kind": "media", "icon": "eventos",
+     "description": "Eventos corporativos, equipo y cultura de empresa."},
+    {"id": "redes", "label": "Redes Sociales", "kind": "links", "icon": "redes",
+     "description": "Enlaces oficiales a las redes sociales de la empresa: Instagram, LinkedIn, Facebook y más."},
+    {"id": "politicas", "label": "Politicas", "kind": "media", "icon": "politicas",
+     "description": "Políticas, normativas y reglamentos internos de la empresa."},
+]
+
+SECTIONS_CACHE_KEY = "sections:config"
+_SECTION_ID_MAX = 32
+_SECTION_LABEL_MAX = 48
+_SECTION_DESC_MAX = 400
+
+def sections_config_blob_name() -> str:
+    return f"{CONFIG_PREFIX.strip('/')}/sections.json"
+
+def _slugify_section_id(raw: Any) -> Optional[str]:
+    """id de sección = segmento de URL y carpeta en el blob: solo a-z, 0-9 y guión."""
+    text = str(raw or "").strip().lower()
+    out = []
+    for ch in text:
+        if ch.isascii() and (ch.isalnum() or ch == "-"):
+            out.append(ch)
+        elif ch in " _/":
+            out.append("-")
+    slug = "-".join(p for p in "".join(out).split("-") if p)
+    if not slug or len(slug) > _SECTION_ID_MAX or slug[0].isdigit():
+        return None
+    return slug
+
+def sanitize_sections(raw: Any) -> list:
+    """Normaliza la lista guardada. Descarta entradas inválidas o duplicadas y
+    garantiza que 'proyectos' siga existiendo con su tipo original."""
+    if not isinstance(raw, list):
+        raise ValueError("Se esperaba una lista de secciones")
+    if len(raw) > 40:
+        raise ValueError("Demasiadas secciones (máximo 40)")
+
+    cleaned: list = []
+    seen: set = set()
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        sid = _slugify_section_id(entry.get("id"))
+        if not sid or sid in seen:
+            continue
+        kind = str(entry.get("kind") or "media").strip().lower()
+        if kind not in SECTION_KINDS:
+            kind = "media"
+        # Solo puede haber una sección de obras y es la protegida.
+        if kind == "projects" and sid != PROTECTED_SECTION:
+            kind = "media"
+        if sid == PROTECTED_SECTION:
+            kind = "projects"
+        label = " ".join(str(entry.get("label") or "").split())[:_SECTION_LABEL_MAX] or sid.capitalize()
+        description = " ".join(str(entry.get("description") or "").split())[:_SECTION_DESC_MAX]
+        icon = _slugify_section_id(entry.get("icon")) or sid
+        seen.add(sid)
+        cleaned.append({"id": sid, "label": label, "kind": kind,
+                        "icon": icon, "description": description})
+
+    if PROTECTED_SECTION not in seen:
+        cleaned.insert(0, dict(DEFAULT_SECTIONS[0]))
+    if not cleaned:
+        raise ValueError("La configuración no dejó ninguna sección válida")
+    return cleaned
+
+def load_sections() -> list:
+    cached = cache_get(SECTIONS_CACHE_KEY)
+    if cached is not None:
+        return cached
+    items = None
+    try:
+        raw = load_json_blob(sections_config_blob_name())
+        if isinstance(raw, dict):
+            raw = raw.get("sections")
+        if isinstance(raw, list):
+            items = sanitize_sections(raw)
+    except Exception as exc:
+        logging.warning("load_sections (se usa el catálogo por defecto): %s", exc)
+    if not items:
+        items = [dict(s) for s in DEFAULT_SECTIONS]
+    cache_set(SECTIONS_CACHE_KEY, items, ttl_seconds=120)
+    return items
+
+def known_sections() -> list:
+    """ids de todas las secciones activas."""
+    return [s["id"] for s in load_sections()]
+
+def library_sections() -> list:
+    """ids de las secciones que viven en _media/ (todo lo que no son obras)."""
+    return [s["id"] for s in load_sections() if s["kind"] != "projects"]
 
 ACCESS_CACHE_KEY = "access:config"
 _ACCESS_NONE = "__no_config__"
@@ -750,10 +887,12 @@ def load_access_config() -> Optional[dict]:
 # Permisos por persona = capacidades de gestión (qué puede HACER) + secciones/scopes
 # (qué puede VER). Los roles son solo presets rápidos de esas capacidades; el
 # administrador puede ajustar cada capacidad manualmente por usuario.
-CAPS = ("upload", "manageMedia", "share", "refreshIndex", "manageAccess")
+CAPS = ("upload", "manageMedia", "deleteMedia", "share", "refreshIndex", "manageAccess")
 ROLE_CAPS = {
     "admin":    {c: True for c in CAPS},
-    "operador": {"upload": True, "manageMedia": True, "share": True,
+    # El operador sube y organiza, pero borrar es cosa de administración: un
+    # borrado en el blob no tiene deshacer desde la app.
+    "operador": {"upload": True, "manageMedia": True, "deleteMedia": False, "share": True,
                  "refreshIndex": True, "manageAccess": False},
     "viewer":   {c: False for c in CAPS},
 }
@@ -794,9 +933,10 @@ def _normalize_scopes(entry: dict) -> dict:
     if old is not None and old != "*" and isinstance(old, list) and "proyectos" not in raw and "material" not in raw:
         raw["proyectos"] = old
     cleaned: Dict[str, list] = {}
+    valid = known_sections()
     for sec, val in raw.items():
         sec = canon_section(sec)
-        if sec not in KNOWN_SECTIONS or val == "*":
+        if sec not in valid or val == "*":
             continue
         if isinstance(val, list):
             vals = [str(x).strip() for x in val if str(x).strip()]
@@ -839,7 +979,7 @@ def effective_perms(caller: Optional[Dict[str, str]]) -> dict:
             return _perms(email, name, role, caps, "*", {}, restricted, False)
         sections = entry.get("sections", [])
         if sections != "*":
-            sections = [canon_section(s) for s in sections if canon_section(s) in KNOWN_SECTIONS] if isinstance(sections, list) else []
+            sections = [canon_section(s) for s in sections if canon_section(s) in known_sections()] if isinstance(sections, list) else []
         return _perms(email, name, role, caps, sections, _normalize_scopes(entry), restricted, False)
 
     if restricted:
@@ -931,17 +1071,18 @@ def sanitize_access_config(payload: Any, saver_email: str) -> dict:
         seen.add(email)
         role = u.get("role") if u.get("role") in ROLES else "viewer"
         # Capacidades: parten del preset del rol y se sobrescriben con lo que el
-        # admin marcó manualmente. Guardamos solo las 5 capacidades conocidas.
+        # admin marcó manualmente. Guardamos solo las capacidades conocidas.
         caps_in = u.get("caps") if isinstance(u.get("caps"), dict) else {}
         caps = _caps_from(role, caps_in)
+        valid_sections = known_sections()
         sections = u.get("sections", [])
         if sections != "*":
-            sections = [canon_section(s) for s in sections if canon_section(s) in KNOWN_SECTIONS] if isinstance(sections, list) else []
+            sections = [canon_section(s) for s in sections if canon_section(s) in valid_sections] if isinstance(sections, list) else []
         scopes_in = u.get("scopes") if isinstance(u.get("scopes"), dict) else {}
         scopes: Dict[str, list] = {}
         for sec, val in scopes_in.items():
             sec = canon_section(sec)
-            if sec not in KNOWN_SECTIONS:
+            if sec not in valid_sections:
                 continue
             if isinstance(val, list):
                 vals = [str(x).strip() for x in val if str(x).strip()]
@@ -1047,8 +1188,14 @@ def thumb(req: func.HttpRequest) -> func.HttpResponse:
     _, auth_err = require_blob_access(req, blob_path)
     if auth_err:
         return auth_err
-    if ext not in ("jpg", "jpeg", "png", "webp", "tif", "tiff"):
-        return err("thumb solo disponible para imágenes", 400)
+    # Formatos que no son imagen (Word, PowerPoint, CAD…): solo hay miniatura si
+    # alguien la precalculó en _thumbs/. 404 y no 400 para que el frontend caiga
+    # al ícono de tipo sin ruido en consola.
+    source_path = blob_path
+    if ext not in THUMBABLE_IMAGE_EXT:
+        source_path = thumb_sidecar_name(blob_path)
+        if not blob_exists(source_path):
+            return err("Sin miniatura precalculada para este archivo", 404)
 
     try:
         max_width = int(req.params.get("w", "480"))
@@ -1063,14 +1210,14 @@ def thumb(req: func.HttpRequest) -> func.HttpResponse:
     max_width = max(160, min(max_width, 1280))
     quality = max(40, min(quality, 90))
 
-    cache_key = f"thumb:{blob_path}:{max_width}:{quality}:{'logo' if trim else 'std'}"
+    cache_key = f"thumb:{source_path}:{max_width}:{quality}:{'logo' if trim else 'std'}"
     cached = cache_get(cache_key)
     if cached is not None:
         return func.HttpResponse(body=cached[0], status_code=200, headers=binary_headers(cached[1]))
 
     try:
         svc = get_blob_service()
-        bc = svc.get_blob_client(container=CONTAINER, blob=blob_path)
+        bc = svc.get_blob_client(container=CONTAINER, blob=source_path)
         raw = bc.download_blob().readall()
         thumb_bytes, content_type = build_thumbnail_bytes(raw, max_width=max_width, quality=quality, trim=trim)
         cache_set(cache_key, (thumb_bytes, content_type), ttl_seconds=300)
@@ -1624,7 +1771,8 @@ def access_config_endpoint(req: func.HttpRequest) -> func.HttpResponse:
             "exists": cfg is not None,
             "bootstrap": perms.get("bootstrap", False),
             "envAdmins": sorted(ADMIN_EMAILS),
-            "knownSections": KNOWN_SECTIONS,
+            "knownSections": known_sections(),
+            "sections": load_sections(),
             "capabilities": list(CAPS),
         })
 
@@ -1649,6 +1797,52 @@ def access_config_endpoint(req: func.HttpRequest) -> func.HttpResponse:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# GET/POST /api/sections — catálogo de secciones del hub
+#
+# GET  lo lee cualquier usuario autenticado (el menú se arma con esto).
+# POST exige manageAccess: reemplaza la lista completa, en el orden recibido.
+#
+# Borrar una sección la saca del menú pero NO toca los archivos de _media/<id>/:
+# si se vuelve a crear con el mismo id, el contenido reaparece tal cual.
+# ══════════════════════════════════════════════════════════════════════════════
+@app.route(route="sections", methods=["GET", "POST", "OPTIONS"])
+def sections_endpoint(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_ok()
+
+    if req.method == "GET":
+        _, auth_err = require_perms(req)
+        if auth_err:
+            return auth_err
+        return ok({"sections": load_sections(), "kinds": list(SECTION_KINDS),
+                   "protected": PROTECTED_SECTION})
+
+    _, auth_err = require_perms(req, cap="manageAccess")
+    if auth_err:
+        return auth_err
+
+    try:
+        payload = req.get_json()
+    except ValueError:
+        return err("Payload JSON inválido", 400)
+
+    raw = payload.get("sections") if isinstance(payload, dict) else payload
+    try:
+        items = sanitize_sections(raw)
+    except ValueError as exc:
+        return err(str(exc), 400)
+
+    try:
+        save_json_blob(sections_config_blob_name(), {"sections": items})
+        with _cache_lock:
+            _cache.pop(SECTIONS_CACHE_KEY, None)
+        return ok({"saved": True, "sections": items})
+    except Exception as exc:
+        logging.error("save_sections: %s", exc)
+        return err(str(exc), 500)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # BIBLIOTECA DE MEDIA — carpetas ANIDADAS a n niveles
 #
 # Estructura: _media/<seccion>/<a>/<b>/<c>/archivo.ext
@@ -1664,7 +1858,8 @@ def access_config_endpoint(req: func.HttpRequest) -> func.HttpResponse:
 # la carpeta RAÍZ (primer segmento), no cada subcarpeta — así la página Accesos
 # sigue siendo manejable aunque haya muchos niveles.
 # ══════════════════════════════════════════════════════════════════════════════
-MEDIA_SECTIONS = ("marcas", "documentos", "videos", "eventos", "redes", "politicas")
+# Qué secciones viven en _media/ lo decide el catálogo editable (load_sections),
+# no una tupla fija: al crear una sección nueva en el panel ya queda operativa.
 _FOLDER_FORBIDDEN = set('/\\#?%*:|"<>')
 _MEDIA_META_FILES = ("marca.json", "meta.json")
 _MAX_FOLDER_DEPTH = 10
@@ -1712,7 +1907,7 @@ def media_section(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
     section = (req.route_params.get("section") or "").strip().lower()
-    if section not in MEDIA_SECTIONS:
+    if section not in library_sections():
         return err("Sección de media desconocida", 400)
     if req.method == "POST":
         return _media_create_folder(req, section)
@@ -1863,13 +2058,126 @@ def _media_list(req: func.HttpRequest, section: str) -> func.HttpResponse:
 # pasar por la Function), evitando los límites de tamaño del multipart.
 # folderPath admite anidamiento: "Grupo Ripcon/RIPCONCIV".
 # ══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+# POST /api/media/{section}/delete — borrar archivos o una carpeta completa
+#
+#   { "paths": ["_media/documentos/Plantillas/informe.docx", ...] }  → archivos
+#   { "folderPath": "Plantillas/2024" }                              → carpeta recursiva
+#
+# Solo con la capacidad deleteMedia (por defecto, únicamente el rol admin).
+# El material de obra NO se puede borrar por aquí: la ruta exige una sección de
+# biblioteca y "proyectos" es de tipo 'projects', así que nunca entra — más la
+# comprobación explícita de que toda ruta cuelgue de _media/<seccion>/.
+# ══════════════════════════════════════════════════════════════════════════════
+_MAX_DELETE_BATCH = 500
+
+@app.route(route="media/{section}/delete", methods=["POST", "OPTIONS"])
+def media_delete(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_ok()
+
+    section = (req.route_params.get("section") or "").strip().lower()
+    if canon_section(section) == PROTECTED_SECTION:
+        return err("El material de obra no se puede borrar desde el hub", 403)
+    if section not in library_sections():
+        return err("Sección de media desconocida", 400)
+
+    # Autenticar antes de mirar el cuerpo: si no, un anónimo podría sondear qué
+    # rutas existen por la forma del error. El scope por carpeta se revisa
+    # después, cuando ya sabemos sobre qué se está pidiendo actuar.
+    _, auth_err = require_perms(req, section=section, cap="deleteMedia")
+    if auth_err:
+        return auth_err
+
+    try:
+        body = req.get_json()
+    except ValueError:
+        return err("Payload JSON inválido", 400)
+
+    root = _media_root(section)
+    folder_raw = body.get("folderPath")
+    paths_raw = body.get("paths")
+
+    # ── Carpeta completa ──────────────────────────────────────────────────────
+    if folder_raw is not None:
+        folder = _sanitize_folder_path(folder_raw)
+        if not folder:
+            return err("Ruta de carpeta inválida", 400)
+        _, auth_err = require_perms(req, section=section, item=_root_of(folder), cap="deleteMedia")
+        if auth_err:
+            return auth_err
+        prefix = f"{root}/{folder}/"
+        try:
+            svc = get_blob_service()
+            cc = svc.get_container_client(CONTAINER)
+            names = [b.name for b in cc.list_blobs(name_starts_with=prefix)]
+            if not names:
+                return err("La carpeta no existe o ya está vacía", 404)
+            deleted = _delete_blobs(cc, names)
+            logging.info("media_delete carpeta %s (%d blobs)", prefix, deleted)
+            return ok({"deleted": deleted, "folderPath": folder})
+        except Exception as exc:
+            logging.error("media_delete carpeta: %s", exc)
+            return err(str(exc), 500)
+
+    # ── Archivos sueltos ──────────────────────────────────────────────────────
+    if not isinstance(paths_raw, list) or not paths_raw:
+        return err("Indica 'paths' (lista de archivos) o 'folderPath'", 400)
+    if len(paths_raw) > _MAX_DELETE_BATCH:
+        return err(f"Máximo {_MAX_DELETE_BATCH} archivos por operación", 400)
+
+    targets: list = []
+    for raw in paths_raw:
+        path = unquote(str(raw or "")).strip().strip("/")
+        # Toda ruta tiene que colgar de la sección pedida: corta el path traversal
+        # y evita que un id de sección sea prefijo de otro (marcas / marcas-2020).
+        if not path or ".." in path.split("/") or not path.startswith(f"{root}/"):
+            return err(f"Ruta fuera de la sección: {raw}", 400)
+        rel = path[len(root) + 1:]
+        if "/" not in rel:
+            return err("No se pueden borrar archivos sueltos en la raíz de la sección", 400)
+        targets.append(path)
+
+    # El scope por carpeta se evalúa contra la raíz de cada archivo.
+    for path in targets:
+        _, auth_err = require_perms(req, section=section,
+                                    item=_root_of(path[len(root) + 1:]), cap="deleteMedia")
+        if auth_err:
+            return auth_err
+
+    try:
+        svc = get_blob_service()
+        cc = svc.get_container_client(CONTAINER)
+        deleted = _delete_blobs(cc, targets)
+        logging.info("media_delete %d archivo(s) en %s", deleted, section)
+        return ok({"deleted": deleted, "requested": len(targets)})
+    except Exception as exc:
+        logging.error("media_delete archivos: %s", exc)
+        return err(str(exc), 500)
+
+
+def _delete_blobs(cc, names: list) -> int:
+    """Borra blobs uno a uno y arrastra su miniatura precalculada de _thumbs/.
+    Un 404 no es error: la meta es que el blob no exista al terminar."""
+    deleted = 0
+    for name in names:
+        for target in (name, thumb_sidecar_name(name)):
+            try:
+                cc.delete_blob(target)
+                if target == name:
+                    deleted += 1
+            except ResourceNotFoundError:
+                pass
+    return deleted
+
+
 @app.route(route="media/{section}/plan", methods=["POST", "OPTIONS"])
 def media_upload_plan(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
 
     section = (req.route_params.get("section") or "").strip().lower()
-    if section not in MEDIA_SECTIONS:
+    if section not in library_sections():
         return err("Sección de media desconocida", 400)
 
     try:
@@ -1969,7 +2277,7 @@ def media_folder_meta(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
     section = (req.route_params.get("section") or "").strip().lower()
-    if section not in MEDIA_SECTIONS:
+    if section not in library_sections():
         return err("Sección de media desconocida", 400)
 
     try:
@@ -2053,7 +2361,7 @@ def media_links(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "OPTIONS":
         return options_ok()
     section = (req.route_params.get("section") or "").strip().lower()
-    if section not in MEDIA_SECTIONS:
+    if section not in library_sections():
         return err("Sección de media desconocida", 400)
 
     if req.method == "POST":
@@ -3104,7 +3412,7 @@ def upload_remote_copy_status(req: func.HttpRequest) -> func.HttpResponse:
 
     section = (body.get("section") or "").strip().lower()
     if section:
-        if section not in MEDIA_SECTIONS:
+        if section not in library_sections():
             return err("Sección de media desconocida", 400)
         dest = _sanitize_folder_path(body.get("destPath", ""))
         if not dest:
@@ -3194,7 +3502,7 @@ def upload_remote_prepare(req: func.HttpRequest) -> func.HttpResponse:
     try:
         if destination == "media":
             section = (body.get("section") or "").strip().lower()
-            if section not in MEDIA_SECTIONS:
+            if section not in library_sections():
                 return err("Sección de media desconocida", 400)
             dest = _sanitize_folder_path(body.get("destPath", ""))
             if not dest:
@@ -3306,7 +3614,7 @@ def upload_remote_media_plan(req: func.HttpRequest) -> func.HttpResponse:
         return err("Cuerpo JSON inválido", 400)
 
     section = (body.get("section") or "").strip().lower()
-    if section not in MEDIA_SECTIONS:
+    if section not in library_sections():
         return err("Sección de media desconocida", 400)
     dest = _sanitize_folder_path(body.get("destPath", ""))
     if dest is None:
@@ -3380,7 +3688,7 @@ def upload_remote_media_batch(req: func.HttpRequest) -> func.HttpResponse:
         return err("Cuerpo JSON inválido", 400)
 
     section = (body.get("section") or "").strip().lower()
-    if section not in MEDIA_SECTIONS:
+    if section not in library_sections():
         return err("Sección de media desconocida", 400)
     dest = _sanitize_folder_path(body.get("destPath", ""))
     if not dest:

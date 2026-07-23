@@ -109,6 +109,9 @@ export const api = {
   getMe:            ()           => apiFetch('/api/me'),
   getAccessConfig:  ()           => apiFetch('/api/access'),
   saveAccessConfig: (config)     => apiFetch('/api/access', { method: 'POST', body: JSON.stringify(config) }),
+  // ── Catálogo de secciones (el menú lateral se arma con esto) ───────────────
+  getSections:      ()           => apiFetch('/api/sections'),
+  saveSections:     (sections)   => apiFetch('/api/sections', { method: 'POST', body: JSON.stringify({ sections }) }),
   getProjects:      ()           => apiFetch('/api/projects', {}, 'projects'),
   getWeeks:         (id)         => apiFetch(`/api/projects/${id}/weeks`, {}, `weeks:${id}`),
   getBrowse:        (id, path = '') => {
@@ -140,6 +143,12 @@ export const api = {
   listMediaFolders: (section) => apiFetch(`/api/media/${section}`),
   createMediaFolder:(section, name, parentPath = '') =>
     apiFetch(`/api/media/${section}`, { method: 'POST', body: JSON.stringify({ name, parentPath }) }),
+  // Borrado (capacidad deleteMedia). El backend rechaza cualquier ruta que no
+  // cuelgue de _media/<seccion>/, así que Proyectos nunca es alcanzable.
+  deleteMediaFiles: (section, paths) =>
+    apiFetch(`/api/media/${section}/delete`, { method: 'POST', body: JSON.stringify({ paths }) }),
+  deleteMediaFolder:(section, folderPath) =>
+    apiFetch(`/api/media/${section}/delete`, { method: 'POST', body: JSON.stringify({ folderPath }) }),
   // Plan de subida directa navegador→blob para biblioteca (SAS por archivo).
   // (Antes había uploadMediaFiles multipart, pero chocaba con el límite de
   // tamaño de la Function → 413; ahora TODO va directo al blob.)

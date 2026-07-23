@@ -9,7 +9,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api } from '../utils/api'
 import { fetchThumb } from '../utils/thumbs'
 import { useAuthz, hasCap } from '../utils/authz'
-import { sectionById } from '../config/sections'
+import { useSections } from '../utils/sections'
 import Modal from '../components/Modal'
 import FichaModal from '../components/FichaModal'
 import { needsFaststart, playWithMse } from '../utils/smartVideo'
@@ -33,6 +33,8 @@ const HTML_EXT = ['html', 'htm']
 const VIDEO_EXT = ['mp4', 'm4v', 'webm', 'ogg', 'ogv', 'mov', 'mkv', 'm2ts', 'mts', 'ts', 'hevc', 'h265', '3gp', 'avi', 'wmv', 'flv']
 const AUDIO_EXT = ['mp3', 'wav', 'm4a', 'aac', 'oga', 'flac', 'opus']
 const OFFICE_EXT = ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx']
+// Formatos sin render en navegador: se pide la miniatura precalculada de _thumbs/.
+const PRECOMPUTED_THUMB_EXT = [...OFFICE_EXT, 'ai', 'eps', 'psd', 'indd', 'dwg', 'dxf']
 const TEXT_EXT = ['txt', 'csv', 'md', 'json', 'xml', 'log', 'srt', 'yml', 'yaml']
 
 // Qué visor usar para cada archivo en el modal grande.
@@ -113,8 +115,9 @@ function fmtDate(iso) {
 }
 
 export default function MediaFolderPage({ sectionId }) {
-  const section = sectionById(sectionId)
+  const section = useSections().byId(sectionId)
   const params = useParams()
+  const navigate = useNavigate()
   // Ruta anidada desde el comodín: "/marcas/Grupo%20Ripcon/RIPCONCIV" →
   // ["Grupo Ripcon", "RIPCONCIV"]. Cada segmento viene codificado en la URL.
   const segments = useMemo(
@@ -127,6 +130,10 @@ export default function MediaFolderPage({ sectionId }) {
   const folder = segments[segments.length - 1] || ''
   const { me } = useAuthz()
   const canUpload = hasCap(me, 'manageMedia')
+  // Borrar es una capacidad aparte de subir: por defecto solo la tiene el admin.
+  // El material de obra no es alcanzable desde aquí (esta página solo abre
+  // secciones de biblioteca), y el backend lo rechaza igualmente.
+  const canDelete = hasCap(me, 'deleteMedia')
   const isMarcas = sectionId === 'marcas'
 
   const [data, setData] = useState(null)
@@ -138,6 +145,7 @@ export default function MediaFolderPage({ sectionId }) {
   const [uploadOpen, setUploadOpen] = useState(false)
   const [newFolderOpen, setNewFolderOpen] = useState(false)
   const [fichaOpen, setFichaOpen] = useState(false)
+  const [pendingDelete, setPendingDelete] = useState(null)   // { kind:'file'|'folder', ... }
   const [searchParams, setSearchParams] = useSearchParams()
 
   // Al crear una carpeta con "agregar ficha", se navega aquí con ?ficha=1.
@@ -230,6 +238,11 @@ export default function MediaFolderPage({ sectionId }) {
   if (loading) return <div className="loading"><div className="spinner" /><span>Cargando {folder}...</span></div>
   if (error) return <><Crumb /><div className="alert alert-error" role="alert">No se pudo cargar: {error}</div></>
 
+  // Null cuando no hay permiso: los tiles no pintan el botón de papelera.
+  const askDelete = canDelete
+    ? (f) => setPendingDelete({ kind: 'file', path: f.path, name: f.name.split('/').pop() })
+    : null
+
   const countBits = []
   if (subfolders.length) countBits.push(`${subfolders.length} carpeta${subfolders.length !== 1 ? 's' : ''}`)
   countBits.push(`${files.length} archivo${files.length !== 1 ? 's' : ''}`)
@@ -242,11 +255,17 @@ export default function MediaFolderPage({ sectionId }) {
           <h1 className="page-title">{meta?.name || folder}</h1>
           <p className="page-sub">{meta?.tagline || countBits.join(' · ')}</p>
         </div>
-        {canUpload && (
+        {(canUpload || canDelete) && (
           <div className="brand-upload">
-            <button className="btn btn-ghost" onClick={() => setFichaOpen(true)}>{meta ? 'Editar ficha' : 'Agregar ficha'}</button>
-            <button className="btn btn-ghost" onClick={() => setNewFolderOpen(true)}>Nueva carpeta</button>
-            <button className="btn btn-primary" onClick={() => setUploadOpen(true)}>Subir archivos</button>
+            {canDelete && folderPath && (
+              <button className="btn btn-ghost btn-danger-ghost"
+                onClick={() => setPendingDelete({ kind: 'folder', path: folderPath, name: folder, count: files.length, self: true })}>
+                Eliminar carpeta
+              </button>
+            )}
+            {canUpload && <button className="btn btn-ghost" onClick={() => setFichaOpen(true)}>{meta ? 'Editar ficha' : 'Agregar ficha'}</button>}
+            {canUpload && <button className="btn btn-ghost" onClick={() => setNewFolderOpen(true)}>Nueva carpeta</button>}
+            {canUpload && <button className="btn btn-primary" onClick={() => setUploadOpen(true)}>Subir archivos</button>}
           </div>
         )}
       </div>
@@ -274,17 +293,26 @@ export default function MediaFolderPage({ sectionId }) {
           <h2 className="logo-group-title">Carpetas<span className="logo-group-count">{subfolders.length}</span></h2>
           <div className="media-folder-grid">
             {subfolders.map(f => (
-              <Link key={f.path} to={`${section.path}/${f.path.split('/').map(encodeURIComponent).join('/')}`} className="media-folder-card">
-                <div className="media-folder-icon" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8A2 2 0 0 1 21 9.5V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
-                  </svg>
-                </div>
-                <div className="media-folder-name">{f.name}</div>
-                <div className="media-folder-meta">
-                  {f.fileCount} archivo{f.fileCount !== 1 ? 's' : ''}{f.lastModified ? ` · ${fmtDate(f.lastModified)}` : ''}
-                </div>
-              </Link>
+              <div key={f.path} className="media-folder-slot">
+                <Link to={`${section.path}/${f.path.split('/').map(encodeURIComponent).join('/')}`} className="media-folder-card">
+                  <div className="media-folder-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8A2 2 0 0 1 21 9.5V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
+                    </svg>
+                  </div>
+                  <div className="media-folder-name">{f.name}</div>
+                  <div className="media-folder-meta">
+                    {f.fileCount} archivo{f.fileCount !== 1 ? 's' : ''}{f.lastModified ? ` · ${fmtDate(f.lastModified)}` : ''}
+                  </div>
+                </Link>
+                {canDelete && (
+                  <button className="icon-btn icon-btn-danger tile-del tile-del-folder"
+                    onClick={() => setPendingDelete({ kind: 'folder', path: f.path, name: f.name, count: f.fileCount })}
+                    title={`Eliminar la carpeta ${f.name}`} aria-label={`Eliminar la carpeta ${f.name}`}>
+                    <TrashIcon />
+                  </button>
+                )}
+              </div>
             ))}
           </div>
         </section>
@@ -343,7 +371,7 @@ export default function MediaFolderPage({ sectionId }) {
                   return (
                     <section key={fo} className="logo-group">
                       <h2 className="logo-group-title">{FORMAT_LABEL[fo]}<span className="logo-group-count">{group.length}</span></h2>
-                      <div className="logo-grid">{group.map(v => <LogoTile key={v.path} variant={v} brandName={meta?.name || folder} onOpen={openViewer} />)}</div>
+                      <div className="logo-grid">{group.map(v => <LogoTile key={v.path} variant={v} brandName={meta?.name || folder} onOpen={openViewer} onDelete={askDelete} />)}</div>
                     </section>
                   )
                 })}
@@ -355,27 +383,44 @@ export default function MediaFolderPage({ sectionId }) {
       {otherImages.length > 0 && (
         <section className="logo-group">
           <h2 className="logo-group-title">{variants.length > 0 ? 'Otras imágenes' : 'Imágenes'}<span className="logo-group-count">{otherImages.length}</span></h2>
-          <div className="media-img-grid">{otherImages.map(f => <ImageTile key={f.path} file={f} onOpen={openViewer} />)}</div>
+          <div className="media-img-grid">{otherImages.map(f => <ImageTile key={f.path} file={f} onOpen={openViewer} onDelete={askDelete} />)}</div>
         </section>
       )}
 
       {brandColors.length > 0 && <BrandColors colors={brandColors} />}
 
-      {fontFiles.length > 0 && <Typography fonts={fontFiles} />}
+      {fontFiles.length > 0 && <Typography fonts={fontFiles} onDelete={askDelete} />}
 
-      {htmlFiles.length > 0 && <HtmlPreviews files={htmlFiles} />}
+      {htmlFiles.length > 0 && <HtmlPreviews files={htmlFiles} onDelete={askDelete} />}
 
       {otherDocs.length > 0 && (
         <section className="logo-group">
           <h2 className="logo-group-title">Archivos<span className="logo-group-count">{otherDocs.length}</span></h2>
           <div className="media-img-grid">
-            {otherDocs.map(f => <FileTile key={f.path} file={f} previewPath={findPreviewImage(f.name, imageFiles)?.path} onOpen={openViewer} />)}
+            {otherDocs.map(f => <FileTile key={f.path} file={f} previewPath={findPreviewImage(f.name, imageFiles)?.path} onOpen={openViewer} onDelete={askDelete} />)}
           </div>
         </section>
       )}
 
       {viewer >= 0 && allFiles[viewer] && (
         <FileViewer files={allFiles} index={viewer} onClose={() => setViewer(-1)} onMove={moveViewer} />
+      )}
+
+      {canDelete && (
+        <DeleteModal
+          target={pendingDelete}
+          sectionId={sectionId}
+          onClose={() => setPendingDelete(null)}
+          onDeleted={(t) => {
+            setPendingDelete(null)
+            // Al borrar la carpeta en la que estamos ya no hay dónde volver:
+            // subimos un nivel. En el resto de casos basta recargar el listado.
+            if (t.self) navigate(segments.length > 1
+              ? `${section.path}/${segments.slice(0, -1).map(encodeURIComponent).join('/')}`
+              : section.path)
+            else load()
+          }}
+        />
       )}
 
       {canUpload && (
@@ -398,7 +443,7 @@ export default function MediaFolderPage({ sectionId }) {
 // Crear una subcarpeta dentro de la carpeta actual (anidamiento a n niveles).
 function NewFolderModal({ open, onClose, sectionId, parentPath, parentName, onCreated }) {
   const navigate = useNavigate()
-  const section = sectionById(sectionId)
+  const section = useSections().byId(sectionId)
   const [name, setName] = useState('')
   const [addFicha, setAddFicha] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -706,7 +751,7 @@ function sampleCornerColor(imgEl) {
   } catch { return null }
 }
 
-function LogoTile({ variant: v, brandName, onOpen }) {
+function LogoTile({ variant: v, brandName, onOpen, onDelete }) {
   const [src, setSrc] = useState(null)
   const [bg, setBg] = useState(null)
   const [loaded, setLoaded] = useState(false)
@@ -732,12 +777,17 @@ function LogoTile({ variant: v, brandName, onOpen }) {
         <button className="icon-btn" onClick={() => downloadFile(v.path, v.name).catch(() => {})} title="Descargar original" aria-label={`Descargar ${v.formatLabel}`}>
           <DownloadIcon />
         </button>
+        {onDelete && (
+          <button className="icon-btn icon-btn-danger" onClick={() => onDelete(v)} title="Eliminar" aria-label={`Eliminar ${v.formatLabel}`}>
+            <TrashIcon />
+          </button>
+        )}
       </div>
     </div>
   )
 }
 
-function ImageTile({ file: f, onOpen }) {
+function ImageTile({ file: f, onOpen, onDelete }) {
   const [src, setSrc] = useState(null)
   const [loaded, setLoaded] = useState(false)
   useEffect(() => {
@@ -758,6 +808,11 @@ function ImageTile({ file: f, onOpen }) {
         <button className="icon-btn" onClick={() => downloadFile(f.path, f.name.split('/').pop()).catch(() => {})} title="Descargar" aria-label={`Descargar ${f.name}`}>
           <DownloadIcon />
         </button>
+        {onDelete && (
+          <button className="icon-btn icon-btn-danger" onClick={() => onDelete(f)} title="Eliminar" aria-label={`Eliminar ${f.name}`}>
+            <TrashIcon />
+          </button>
+        )}
       </div>
     </div>
   )
@@ -793,15 +848,26 @@ function BrandColors({ colors }) {
 }
 
 // Tipo de archivo no-imagen → monograma + color, para que se vea como miniatura.
+// Los de Adobe conservan el fondo oscuro de sus apps; los de Office y el resto
+// van sobre fondo claro (un tile casi negro se lee como "miniatura rota").
 const FILE_KINDS = {
   ai:   { badge: 'AI',   glyph: 'Ai',  tint: '#ff7a00', bg: '#2a1a06' },
   eps:  { badge: 'EPS',  glyph: 'Ai',  tint: '#ff7a00', bg: '#2a1a06' },
   psd:  { badge: 'PSD',  glyph: 'Ps',  tint: '#31a8ff', bg: '#001e36' },
   pdf:  { badge: 'PDF',  glyph: 'PDF', tint: '#ff5b5b', bg: '#2a0d0d' },
   indd: { badge: 'INDD', glyph: 'Id',  tint: '#ff3f8b', bg: '#2a0a1a' },
-  zip:  { badge: 'ZIP',  glyph: '',    tint: '#d6b24a', bg: '#211d10' },
-  rar:  { badge: 'RAR',  glyph: '',    tint: '#d6b24a', bg: '#211d10' },
-  '7z': { badge: '7Z',   glyph: '',    tint: '#d6b24a', bg: '#211d10' },
+  // Office: color oficial de cada app sobre su tinte claro.
+  doc:  { badge: 'DOC',  glyph: 'W',   tint: '#2b579a', bg: '#e9f0fa' },
+  docx: { badge: 'DOCX', glyph: 'W',   tint: '#2b579a', bg: '#e9f0fa' },
+  rtf:  { badge: 'RTF',  glyph: 'W',   tint: '#2b579a', bg: '#e9f0fa' },
+  xls:  { badge: 'XLS',  glyph: 'X',   tint: '#217346', bg: '#e7f3ec' },
+  xlsx: { badge: 'XLSX', glyph: 'X',   tint: '#217346', bg: '#e7f3ec' },
+  csv:  { badge: 'CSV',  glyph: 'X',   tint: '#217346', bg: '#e7f3ec' },
+  ppt:  { badge: 'PPT',  glyph: 'P',   tint: '#c43e1c', bg: '#fceee9' },
+  pptx: { badge: 'PPTX', glyph: 'P',   tint: '#c43e1c', bg: '#fceee9' },
+  zip:  { badge: 'ZIP',  glyph: '',    tint: '#a8842a', bg: '#f6f0dd' },
+  rar:  { badge: 'RAR',  glyph: '',    tint: '#a8842a', bg: '#f6f0dd' },
+  '7z': { badge: '7Z',   glyph: '',    tint: '#a8842a', bg: '#f6f0dd' },
   ttf:  { badge: 'TTF',  glyph: 'Aa',  tint: '#8ab4ff', bg: '#0e1230' },
   otf:  { badge: 'OTF',  glyph: 'Aa',  tint: '#8ab4ff', bg: '#0e1230' },
   woff: { badge: 'WOFF', glyph: 'Aa',  tint: '#8ab4ff', bg: '#0e1230' },
@@ -809,15 +875,16 @@ const FILE_KINDS = {
 }
 function fileKind(name) {
   const ext = (name.split('.').pop() || '').toLowerCase()
-  return FILE_KINDS[ext] || { badge: (ext || 'FILE').toUpperCase().slice(0, 4), glyph: '', tint: '#9aa3b8', bg: '#161821' }
+  return FILE_KINDS[ext] || { badge: (ext || 'FILE').toUpperCase().slice(0, 4), glyph: '', tint: '#5b6478', bg: '#eef0f5' }
 }
 
-function FileTile({ file: f, previewPath, onOpen }) {
+function FileTile({ file: f, previewPath, onOpen, onDelete }) {
   const name = f.name.split('/').pop()
   const k = fileKind(name)
-  const isPdf = extOf(name) === 'pdf'
+  const ext = extOf(name)
+  const isPdf = ext === 'pdf'
   const [src, setSrc] = useState(null)
-  const [pageThumb, setPageThumb] = useState(null)   // miniatura de la 1ª página del PDF
+  const [pageThumb, setPageThumb] = useState(null)   // 1ª página del PDF o miniatura precalculada
   useEffect(() => {
     if (!previewPath) return
     let alive = true
@@ -837,6 +904,15 @@ function FileTile({ file: f, previewPath, onOpen }) {
     })()
     return () => { alive = false }
   }, [f.path, isPdf, previewPath])
+  // Word, PowerPoint y demás formatos que el navegador no sabe rasterizar: si
+  // alguien dejó una miniatura precalculada en _thumbs/ el backend la sirve;
+  // si no, responde 404 y nos quedamos con el monograma de tipo.
+  useEffect(() => {
+    if (previewPath || isPdf || !PRECOMPUTED_THUMB_EXT.includes(ext)) return
+    let alive = true
+    fetchThumb(f.path, { w: 480 }).then(u => { if (alive) setPageThumb(u) }).catch(() => {})
+    return () => { alive = false }
+  }, [f.path, ext, isPdf, previewPath])
   const img = src || pageThumb
   return (
     <div className="media-img-tile">
@@ -857,6 +933,11 @@ function FileTile({ file: f, previewPath, onOpen }) {
         <button className="icon-btn" onClick={() => downloadFile(f.path, name).catch(() => {})} title="Descargar" aria-label={`Descargar ${name}`}>
           <DownloadIcon />
         </button>
+        {onDelete && (
+          <button className="icon-btn icon-btn-danger" onClick={() => onDelete(f)} title="Eliminar" aria-label={`Eliminar ${name}`}>
+            <TrashIcon />
+          </button>
+        )}
       </div>
     </div>
   )
@@ -872,11 +953,11 @@ function DocIcon({ color }) {
 }
 
 // ── Tipografía: especímenes de fuente en vivo (carga la fuente del blob) ──────
-function Typography({ fonts }) {
+function Typography({ fonts, onDelete }) {
   return (
     <section className="typo-section">
       <h2 className="logo-group-title">Tipografía<span className="logo-group-count">{fonts.length}</span></h2>
-      {fonts.map(f => <FontSpecimen key={f.path} file={f} />)}
+      {fonts.map(f => <FontSpecimen key={f.path} file={f} onDelete={onDelete} />)}
     </section>
   )
 }
@@ -887,7 +968,7 @@ const TYPO_WEIGHTS = [
 ]
 const TYPO_SAMPLE = 'Construcción e ingeniería civil'
 
-function FontSpecimen({ file: f }) {
+function FontSpecimen({ file: f, onDelete }) {
   const name = f.name.split('/').pop().replace(/\.[^.]+$/, '')
   const [family, setFamily] = useState(null)
   const [failed, setFailed] = useState(false)
@@ -916,6 +997,11 @@ function FontSpecimen({ file: f }) {
           <span className="typo-sub">{extOf(f.name).toUpperCase()} · {fmtSize(f.size)}{f.lastModified ? ` · ${fmtDate(f.lastModified)}` : ''}</span>
         </div>
         <button className="btn btn-ghost btn-sm" onClick={() => downloadFile(f.path, f.name.split('/').pop()).catch(() => {})}>Descargar</button>
+        {onDelete && (
+          <button className="icon-btn icon-btn-danger" onClick={() => onDelete(f)} title="Eliminar" aria-label={`Eliminar ${name}`}>
+            <TrashIcon />
+          </button>
+        )}
       </div>
       {failed
         ? <p className="typo-fail">No se pudo cargar la vista previa de esta fuente. Puedes descargarla.</p>
@@ -938,12 +1024,12 @@ function HtmlPreviews({ files }) {
   return (
     <section className="html-section">
       <h2 className="logo-group-title">Vista previa<span className="logo-group-count">{files.length}</span></h2>
-      <div className="html-grid">{files.map(f => <HtmlPreview key={f.path} file={f} />)}</div>
+      <div className="html-grid">{files.map(f => <HtmlPreview key={f.path} file={f} onDelete={onDelete} />)}</div>
     </section>
   )
 }
 
-function HtmlPreview({ file: f }) {
+function HtmlPreview({ file: f, onDelete }) {
   const name = f.name.split('/').pop()
   const [html, setHtml] = useState(null)
   const [failed, setFailed] = useState(false)
@@ -982,6 +1068,11 @@ function HtmlPreview({ file: f }) {
         <button className="icon-btn" onClick={() => downloadFile(f.path, name).catch(() => {})} title="Descargar" aria-label={`Descargar ${name}`}>
           <DownloadIcon />
         </button>
+        {onDelete && (
+          <button className="icon-btn icon-btn-danger" onClick={() => onDelete(f)} title="Eliminar" aria-label={`Eliminar ${name}`}>
+            <TrashIcon />
+          </button>
+        )}
       </div>
       <div className="html-frame-wrap">
         {failed
@@ -999,5 +1090,68 @@ function DownloadIcon() {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
       <path d="M12 4v11M7.5 11 12 15.5 16.5 11" /><path d="M4.5 19.5h15" />
     </svg>
+  )
+}
+
+function TrashIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6.5 7l.8 12a1 1 0 0 0 1 .9h7.4a1 1 0 0 0 1-.9l.8-12M10 11v5M14 11v5" />
+    </svg>
+  )
+}
+
+// ── Confirmación de borrado ──────────────────────────────────────────────────
+// Un archivo se confirma con un clic; una carpeta obliga a escribir su nombre,
+// porque arrastra todo lo que tenga dentro y en el blob no hay deshacer.
+function DeleteModal({ target, sectionId, onClose, onDeleted }) {
+  const [typed, setTyped] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
+  const isFolder = target?.kind === 'folder'
+
+  useEffect(() => { setTyped(''); setErr(null); setBusy(false) }, [target])
+
+  if (!target) return null
+  const ready = !isFolder || typed.trim() === target.name
+
+  async function run() {
+    setBusy(true); setErr(null)
+    try {
+      if (isFolder) await api.deleteMediaFolder(sectionId, target.path)
+      else await api.deleteMediaFiles(sectionId, [target.path])
+      onDeleted(target)
+    } catch (e) {
+      setErr(e.message)
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal open onClose={() => !busy && onClose()}
+      title={isFolder ? `Eliminar la carpeta “${target.name}”` : `Eliminar “${target.name}”`}
+      subtitle="Esta acción no se puede deshacer"
+      footer={<>
+        <button className="btn btn-ghost" onClick={onClose} disabled={busy}>Cancelar</button>
+        <button className="btn btn-danger" onClick={run} disabled={busy || !ready}>
+          {busy ? 'Eliminando...' : 'Eliminar'}
+        </button>
+      </>}
+    >
+      {isFolder ? (
+        <label className="field">
+          <span className="field-label">
+            Se borrará la carpeta y {target.count ? `sus ${target.count} archivo${target.count !== 1 ? 's' : ''}` : 'todo su contenido'},
+            incluidas las subcarpetas.
+          </span>
+          <input className="field-input" autoFocus value={typed} placeholder={target.name}
+            onChange={e => setTyped(e.target.value)} />
+          <span className="field-help">Escribe <strong>{target.name}</strong> para confirmar.</span>
+        </label>
+      ) : (
+        <p className="field-help">El archivo se borrará del almacenamiento y dejará de estar disponible para todo el mundo.</p>
+      )}
+      {err && <span className="field-error">{err}</span>}
+    </Modal>
   )
 }

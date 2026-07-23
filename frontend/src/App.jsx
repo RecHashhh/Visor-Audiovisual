@@ -5,7 +5,7 @@ import { lazy, Suspense, useEffect, Fragment } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import LoginPage      from './pages/LoginPage'
 import AppShell       from './components/AppShell'
-import { SECTIONS }   from './config/sections'
+import { SectionsProvider, useSections } from './utils/sections'
 import { AuthzProvider, RequireSection, RequireCap } from './utils/authz'
 import { UploadsProvider } from './utils/uploads'
 import { FavoritesProvider } from './utils/favorites'
@@ -24,6 +24,7 @@ const FavoritesPage    = lazy(() => import('./pages/FavoritesPage'))
 const SharePage        = lazy(() => import('./pages/SharePage'))
 const UploadPage       = lazy(() => import('./pages/UploadPage'))
 const AccessPage       = lazy(() => import('./pages/AccessPage'))
+const SectionsPage     = lazy(() => import('./pages/SectionsPage'))
 const SharesPage       = lazy(() => import('./pages/SharesPage'))
 
 function PageLoader() {
@@ -59,25 +60,37 @@ function RequireAuth({ children }) {
   return children
 }
 
-const mediaSections = SECTIONS.filter(s => s.kind === 'media')
-const linkSections  = SECTIONS.filter(s => s.kind === 'links')
-
 export default function App() {
   const isAuth = useIsAuthenticated()
   const { inProgress } = useMsal()
+  const ready = isAuth && inProgress === InteractionStatus.None
 
   useEffect(() => {
-    if (!isAuth || inProgress !== InteractionStatus.None) return
+    if (!ready) return
     const ping = () => { fetch('/api/health', { cache: 'no-store' }).catch(() => {}) }
     ping()
     const id = setInterval(ping, 2 * 60 * 1000)
     return () => clearInterval(id)
-  }, [isAuth, inProgress])
+  }, [ready])
 
   return (
     <UploadsProvider>
       <DownloadsProvider>
-      <Suspense fallback={<PageLoader />}>
+      {/* Por encima de las rutas: las de sección se generan del catálogo. */}
+      <SectionsProvider enabled={ready}>
+        <Suspense fallback={<PageLoader />}>
+          <AppRoutes />
+        </Suspense>
+      </SectionsProvider>
+      </DownloadsProvider>
+    </UploadsProvider>
+  )
+}
+
+function AppRoutes() {
+  const { mediaSections, linkSections } = useSections()
+
+  return (
         <Routes>
         {/* Rutas públicas — sin layout */}
         <Route path="/login"        element={<LoginPage />} />
@@ -136,16 +149,14 @@ export default function App() {
           <Route path="/fotografia-eventos"     element={<Navigate to="/eventos" replace />} />
           <Route path="/redes-sociales"         element={<Navigate to="/redes" replace />} />
 
-          <Route path="/upload"  element={<RequireCap cap="upload"><UploadPage /></RequireCap>} />
-          <Route path="/accesos" element={<RequireCap cap="manageAccess"><AccessPage /></RequireCap>} />
-          <Route path="/enlaces" element={<RequireCap cap="share"><SharesPage /></RequireCap>} />
+          <Route path="/upload"    element={<RequireCap cap="upload"><UploadPage /></RequireCap>} />
+          <Route path="/accesos"   element={<RequireCap cap="manageAccess"><AccessPage /></RequireCap>} />
+          <Route path="/secciones" element={<RequireCap cap="manageAccess"><SectionsPage /></RequireCap>} />
+          <Route path="/enlaces"   element={<RequireCap cap="share"><SharesPage /></RequireCap>} />
         </Route>
 
           {/* Catch-all */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
-      </Suspense>
-      </DownloadsProvider>
-    </UploadsProvider>
   )
 }

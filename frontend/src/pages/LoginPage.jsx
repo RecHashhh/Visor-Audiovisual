@@ -44,12 +44,12 @@ export default function LoginPage() {
         <div className="login-card">
           <img
             className="login-logo-img only-light"
-            src="/brands/ripconciv/thumbs/horizontal-positivo-azul.png"
+            src="/brands/ripconciv/centrada-positivo-azul.png"
             alt="RIPCONCIV"
           />
           <img
             className="login-logo-img only-dark"
-            src="/brands/ripconciv/wordmark-white.png"
+            src="/brands/ripconciv/centrada-blanco.png"
             alt="RIPCONCIV"
           />
           <h1 className="login-title">Bienvenido</h1>

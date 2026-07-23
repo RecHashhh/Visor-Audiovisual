@@ -2,8 +2,8 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../utils/api'
-import { SECTIONS } from '../config/sections'
-import { SECTION_ICONS } from '../config/sectionIcons'
+import { useSections } from '../utils/sections'
+import { sectionIcon } from '../config/sectionIcons'
 import { useAuthz, canSection } from '../utils/authz'
 
 function statusOf(s = '') {
@@ -26,18 +26,20 @@ function timeAgo(iso) {
   return `Hace ${months} mes${months > 1 ? 'es' : ''}`
 }
 
-const material = SECTIONS.find(s => s.id === 'proyectos')
-const marcas = SECTIONS.find(s => s.id === 'marcas')
-const compactSections = SECTIONS.filter(s => s.id !== 'proyectos' && s.id !== 'marcas')
-
 export default function HomePage() {
   const { me } = useAuthz()
+  const { sections, byId } = useSections()
+  const material = byId('proyectos')
+  const marcas = byId('marcas')
+  const compactSections = sections.filter(s => s.id !== 'proyectos' && s.id !== 'marcas')
   const [projects, setProjects] = useState([])
   const [loading, setLoading] = useState(true)
   const [brandFolders, setBrandFolders] = useState(null) // null = cargando
 
-  const showMaterial = canSection(me, 'proyectos')
-  const showMarcas = canSection(me, 'marcas')
+  // Ojo: una sección puede haberse quitado del catálogo desde el panel, así que
+  // no basta con tener permiso — hay que comprobar que siga existiendo.
+  const showMaterial = canSection(me, 'proyectos') && Boolean(material)
+  const showMarcas = canSection(me, 'marcas') && Boolean(marcas)
 
   useEffect(() => {
     if (!showMaterial) {
@@ -75,7 +77,7 @@ export default function HomePage() {
         <div className="home-hero-photo" aria-hidden="true" />
         <img
           className="home-hero-logo"
-          src="/brands/ripconciv/wordmark-white.png"
+          src="/brands/ripconciv/centrada-blanco.png"
           alt="RIPCONCIV"
         />
         <h1 className="home-hero-title">El hub de contenido audiovisual y de marca</h1>
@@ -114,7 +116,7 @@ export default function HomePage() {
       <section className="home-grid">
         {showMaterial && (
           <Link to={material.path} className="home-card home-card-featured">
-            <div className="home-card-icon">{SECTION_ICONS.proyectos}</div>
+            <div className="home-card-icon">{sectionIcon(material)}</div>
             <div className="home-card-title">{material.label}</div>
             <p className="home-card-desc">{material.description}</p>
             <div className="stats-bar home-featured-stats">
@@ -137,7 +139,7 @@ export default function HomePage() {
 
         {showMarcas && (
           <Link to={marcas.path} className="home-card home-card-brand">
-            <div className="home-card-icon">{SECTION_ICONS.marcas}</div>
+            <div className="home-card-icon">{sectionIcon(marcas)}</div>
             <div className="home-card-title">{marcas.label}</div>
             <p className="home-card-desc">{marcas.description}</p>
             {brandFolders && brandFolders.length > 0 && (
@@ -162,7 +164,7 @@ export default function HomePage() {
 
         {visibleCompact.map(s => (
           <Link key={s.id} to={s.path} className="home-card">
-            <div className="home-card-icon">{SECTION_ICONS[s.id]}</div>
+            <div className="home-card-icon">{sectionIcon(s)}</div>
             <div className="home-card-title">{s.label}</div>
             <p className="home-card-desc">{s.description}</p>
             <span className="home-card-cta">Explorar</span>

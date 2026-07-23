@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../utils/api'
 import { useAuthz, hasCap, canItem } from '../utils/authz'
-import { sectionById } from '../config/sections'
+import { useSections } from '../utils/sections'
 import Modal from '../components/Modal'
 
 function timeAgo(iso) {
@@ -33,11 +33,13 @@ const NEW_FIELDS = {
 const DEFAULT_FIELDS = { btn: 'Nueva carpeta', title: 'Nueva carpeta', label: 'Nombre de la carpeta', placeholder: 'Nombre de la carpeta', help: '' }
 
 export default function MediaSectionPage({ sectionId }) {
-  const section = sectionById(sectionId)
+  const section = useSections().byId(sectionId)
   const cfg = NEW_FIELDS[sectionId] || DEFAULT_FIELDS
   const navigate = useNavigate()
   const { me } = useAuthz()
   const canCreate = hasCap(me, 'manageMedia')
+  // Borrar carpetas es capacidad aparte (por defecto solo admin).
+  const canDelete = hasCap(me, 'deleteMedia')
   const [folders, setFolders] = useState(null)
   const [error, setError] = useState(null)
   const [modalOpen, setModalOpen] = useState(false)
@@ -46,6 +48,9 @@ export default function MediaSectionPage({ sectionId }) {
   const [addFicha, setAddFicha] = useState(false)
   const [err, setErr] = useState(null)
   const [msg, setMsg] = useState(null)
+  const [pendingDelete, setPendingDelete] = useState(null)
+  const [deleting, setDeleting] = useState(false)
+  const [typed, setTyped] = useState('')
 
   function load() {
     setError(null)
@@ -73,6 +78,19 @@ export default function MediaSectionPage({ sectionId }) {
     } catch (e) {
       setErr(`No se pudo crear: ${e.message}`)
     } finally { setCreating(false) }
+  }
+
+  async function removeFolder() {
+    if (!pendingDelete) return
+    setDeleting(true); setErr(null)
+    try {
+      const res = await api.deleteMediaFolder(sectionId, pendingDelete.name)
+      setPendingDelete(null)
+      setMsg({ ok: true, text: `“${pendingDelete.name}” eliminada (${res?.deleted || 0} archivo(s)).` })
+      load()
+    } catch (e) {
+      setErr(`No se pudo eliminar: ${e.message}`)
+    } finally { setDeleting(false) }
   }
 
   const visible = (folders || []).filter(f => canItem(me, sectionId, f.name))
@@ -116,17 +134,28 @@ export default function MediaSectionPage({ sectionId }) {
       {folders !== null && visible.length > 0 && (
         <div className="media-folder-grid">
           {visible.map(f => (
-            <Link key={f.name} to={`${section.path}/${encodeURIComponent(f.name)}`} className="media-folder-card">
-              <div className="media-folder-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8A2 2 0 0 1 21 9.5V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
-                </svg>
-              </div>
-              <div className="media-folder-name">{f.name}</div>
-              <div className="media-folder-meta">
-                {f.fileCount} archivo{f.fileCount !== 1 ? 's' : ''}{f.lastModified ? ` · ${timeAgo(f.lastModified)}` : ''}
-              </div>
-            </Link>
+            <div key={f.name} className="media-folder-slot">
+              <Link to={`${section.path}/${encodeURIComponent(f.name)}`} className="media-folder-card">
+                <div className="media-folder-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8A2 2 0 0 1 21 9.5V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
+                  </svg>
+                </div>
+                <div className="media-folder-name">{f.name}</div>
+                <div className="media-folder-meta">
+                  {f.fileCount} archivo{f.fileCount !== 1 ? 's' : ''}{f.lastModified ? ` · ${timeAgo(f.lastModified)}` : ''}
+                </div>
+              </Link>
+              {canDelete && (
+                <button className="icon-btn icon-btn-danger tile-del tile-del-folder"
+                  onClick={() => { setTyped(''); setErr(null); setPendingDelete(f) }}
+                  title={`Eliminar ${f.name}`} aria-label={`Eliminar la carpeta ${f.name}`}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round">
+                    <path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6.5 7l.8 12a1 1 0 0 0 1 .9h7.4a1 1 0 0 0 1-.9l.8-12M10 11v5M14 11v5" />
+                  </svg>
+                </button>
+              )}
+            </div>
           ))}
         </div>
       )}
@@ -160,6 +189,36 @@ export default function MediaSectionPage({ sectionId }) {
           <input type="checkbox" checked={addFicha} onChange={e => setAddFicha(e.target.checked)} />
           <span>Agregar ficha (descripción, colores{sectionId === 'marcas' ? ', arquetipo' : ''}…) al crear</span>
         </label>
+      </Modal>
+
+      {/* Borrar arrastra todo lo que haya dentro y en el blob no hay deshacer:
+          por eso pide escribir el nombre en vez de un sí/no. */}
+      <Modal
+        open={Boolean(pendingDelete)}
+        onClose={() => !deleting && setPendingDelete(null)}
+        title={pendingDelete ? `Eliminar “${pendingDelete.name}”` : ''}
+        subtitle="Esta acción no se puede deshacer"
+        footer={<>
+          <button className="btn btn-ghost" onClick={() => setPendingDelete(null)} disabled={deleting}>Cancelar</button>
+          <button className="btn btn-danger" onClick={removeFolder}
+            disabled={deleting || typed.trim() !== (pendingDelete?.name || '')}>
+            {deleting ? 'Eliminando...' : 'Eliminar'}
+          </button>
+        </>}
+      >
+        {pendingDelete && (
+          <label className="field">
+            <span className="field-label">
+              Se borrará la carpeta y {pendingDelete.fileCount
+                ? `sus ${pendingDelete.fileCount} archivo${pendingDelete.fileCount !== 1 ? 's' : ''}`
+                : 'todo su contenido'}, incluidas las subcarpetas.
+            </span>
+            <input className="field-input" autoFocus value={typed} placeholder={pendingDelete.name}
+              onChange={e => setTyped(e.target.value)} />
+            <span className="field-help">Escribe <strong>{pendingDelete.name}</strong> para confirmar.</span>
+            {err && <span className="field-error">{err}</span>}
+          </label>
+        )}
       </Modal>
     </>
   )

@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../utils/api'
-import { SECTIONS } from '../config/sections'
+import { useSections } from '../utils/sections'
 import { useAuthz, canSection } from '../utils/authz'
 
 export default function CommandPalette() {
@@ -63,15 +63,16 @@ export default function CommandPalette() {
     Promise.all(loads).then(parts => setDynamicItems(parts.flat()))
   }, [open, me])
 
+  const { sections } = useSections()
   const results = useMemo(() => {
-    const sectionItems = SECTIONS
+    const sectionItems = sections
       .filter(s => canSection(me, s.id))
       .map(s => ({ type: 'Sección', label: s.label, path: s.path }))
     const all = [...sectionItems, ...dynamicItems]
     const t = query.trim().toLowerCase()
     const base = t ? all.filter(i => i.label.toLowerCase().includes(t)) : all
     return base.slice(0, 12)
-  }, [query, dynamicItems, me])
+  }, [query, dynamicItems, me, sections])
 
   function go(item) {
     setOpen(false)

@@ -1,12 +1,13 @@
 // src/components/Sidebar.jsx
 import { NavLink } from 'react-router-dom'
-import { SECTIONS } from '../config/sections'
-import { SECTION_ICONS } from '../config/sectionIcons'
+import { useSections } from '../utils/sections'
+import { sectionIcon } from '../config/sectionIcons'
 import { useAuthz, canSection, hasCap } from '../utils/authz'
 
 export default function Sidebar({ open, onNavigate }) {
   const { me } = useAuthz()
-  const visibleSections = SECTIONS.filter(s => canSection(me, s.id))
+  const { sections } = useSections()
+  const visibleSections = sections.filter(s => canSection(me, s.id))
   const canUpload = hasCap(me, 'upload')
   const canAccess = hasCap(me, 'manageAccess')
   const canShare = hasCap(me, 'share')
@@ -17,12 +18,12 @@ export default function Sidebar({ open, onNavigate }) {
       <div className="sidebar-brand">
         <img
           className="sidebar-logo only-light"
-          src="/brands/ripconciv/thumbs/horizontal-positivo-azul.png"
+          src="/brands/ripconciv/centrada-positivo-azul.png"
           alt="RIPCONCIV"
         />
         <img
           className="sidebar-logo only-dark"
-          src="/brands/ripconciv/wordmark-white.png"
+          src="/brands/ripconciv/centrada-blanco.png"
           alt="RIPCONCIV"
         />
         <span className="sidebar-brand-caption">Hub Audiovisual</span>
@@ -64,7 +65,7 @@ export default function Sidebar({ open, onNavigate }) {
             onClick={onNavigate}
             className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
           >
-            <span className="sidebar-link-icon">{SECTION_ICONS[s.id]}</span>
+            <span className="sidebar-link-icon">{sectionIcon(s)}</span>
             <span className="sidebar-link-label">{s.label}</span>
           </NavLink>
         ))}
@@ -106,6 +107,18 @@ export default function Sidebar({ open, onNavigate }) {
                 </svg>
               </span>
               <span className="sidebar-link-label">Accesos</span>
+            </NavLink>
+          )}
+          {canAccess && (
+            <NavLink to="/secciones" onClick={onNavigate} className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
+              <span className="sidebar-link-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M4 6h10M4 12h16M4 18h7" />
+                  <circle cx="18.5" cy="6" r="1.6" />
+                  <circle cx="14" cy="18" r="1.6" />
+                </svg>
+              </span>
+              <span className="sidebar-link-label">Secciones</span>
             </NavLink>
           )}
         </div>

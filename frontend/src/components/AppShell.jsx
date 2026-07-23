@@ -26,8 +26,8 @@ function NoAccessScreen({ email }) {
   return (
     <div className="noaccess">
       <div className="noaccess-card">
-        <img src="/brands/ripconciv/thumbs/simbolo-positivo-azul.png" alt="RIPCONCIV" className="noaccess-logo only-light" />
-        <img src="/brands/ripconciv/symbol-white.png" alt="RIPCONCIV" className="noaccess-logo only-dark" />
+        <img src="/brands/ripconciv/centrada-positivo-azul.png" alt="RIPCONCIV" className="noaccess-logo only-light" />
+        <img src="/brands/ripconciv/centrada-blanco.png" alt="RIPCONCIV" className="noaccess-logo only-dark" />
         <h1 className="noaccess-title">No tienes acceso al hub</h1>
         <p className="noaccess-text">
           Tu cuenta <strong>{email}</strong> inició sesión correctamente, pero no está

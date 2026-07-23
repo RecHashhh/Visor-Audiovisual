@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../utils/api'
 import { useAuthz, hasCap } from '../utils/authz'
-import { sectionById } from '../config/sections'
+import { useSections } from '../utils/sections'
 import Modal from '../components/Modal'
 
 // ── Iconos de marca (blancos, sobre el color de la red) ──────────────────────
@@ -106,7 +106,7 @@ function handleFrom(url, net) {
 }
 
 export default function LinksPage({ sectionId }) {
-  const section = sectionById(sectionId)
+  const section = useSections().byId(sectionId)
   const { me } = useAuthz()
   const canManage = hasCap(me, 'manageMedia')
 

@@ -9,13 +9,12 @@ import { api } from '../utils/api'
 import { uploadFileToBlob } from '../utils/blobUpload'
 import { useUploads } from '../utils/uploads'
 import { useAuthz, hasCap, canItem } from '../utils/authz'
-import { SECTIONS } from '../config/sections'
+import { useSections } from '../utils/sections'
 
 const PREFIJOS = ['FOT', 'DRN', 'VID', 'I360', 'E360']
 const LOCAL_CONCURRENCY = 3
 const REMOTE_CHUNK = 200
 const STATUS_CLS = { completo: 'badge-green', subiendo: 'badge-orange', pendiente: 'badge-red' }
-const MEDIA_SECTIONS = SECTIONS.filter(s => s.kind === 'media')
 
 function fmtSize(b) {
   if (!b) return '0 B'
@@ -41,8 +40,9 @@ function fmtEta(sec) {
 export default function UploadPage() {
   const { me } = useAuthz()
   const [destination, setDestination] = useState('proyecto') // 'proyecto' | 'biblioteca'
+  const { mediaSections } = useSections()
   const canProjects = hasCap(me, 'upload')
-  const manageableMedia = MEDIA_SECTIONS.filter(() => hasCap(me, 'manageMedia'))
+  const manageableMedia = mediaSections.filter(() => hasCap(me, 'manageMedia'))
 
   useEffect(() => {
     if (!canProjects && manageableMedia.length) setDestination('biblioteca')
