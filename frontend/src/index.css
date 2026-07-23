@@ -2012,7 +2012,7 @@ label.btn-sm { display: inline-flex; align-items: center; }
   max-width: 440px;
   text-align: center;
 }
-.noaccess-logo { height: 58px; margin-bottom: 18px; }
+.noaccess-logo { height: 52px; margin-bottom: 18px; }
 .noaccess-title { font-size: 1.25rem; font-weight: 800; color: var(--text); }
 .noaccess-text {
   margin: 12px 0 22px;
