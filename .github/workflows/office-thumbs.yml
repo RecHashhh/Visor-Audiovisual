@@ -1,0 +1,65 @@
+name: Miniaturas de Office
+
+# Genera las miniaturas de Word/Excel/PowerPoint que el backend no puede
+# producir (Azure Functions en plan Consumption no trae LibreOffice) y las deja
+# en _thumbs/<ruta>.jpg, que es de donde las sirve /api/thumb.
+#
+# Se ejecuta en el runner de Ubuntu, así que no depende de que ningún equipo
+# esté encendido ni de tener LibreOffice instalado en local.
+#
+# Requiere un secret del repositorio:
+#   AZURE_STORAGE_CONNECTION_STRING  (el mismo de backend/local.settings.json)
+
+on:
+  schedule:
+    # Cada 6 horas. Ajusta la frecuencia según cada cuánto subís material.
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      section:
+        description: 'Solo una sección (vacío = toda la biblioteca)'
+        required: false
+        default: ''
+      force:
+        description: 'Regenerar también las miniaturas que ya existen'
+        type: boolean
+        required: false
+        default: false
+
+jobs:
+  thumbs:
+    runs-on: ubuntu-latest
+    # Convertir muchos documentos puede tardar; sin esto el job se corta a las 6 h.
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar LibreOffice
+        run: |
+          sudo apt-get update -qq
+          # --no-install-recommends evita arrastrar el escritorio entero.
+          sudo apt-get install -y --no-install-recommends libreoffice-writer libreoffice-calc libreoffice-impress
+          soffice --version
+
+      - name: Instalar dependencias de Python
+        run: pip install --quiet azure-storage-blob pillow pymupdf
+
+      - name: Generar miniaturas
+        env:
+          AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+          BLOB_CONTAINER: audiovisual
+        run: |
+          if [ -z "$AZURE_STORAGE_CONNECTION_STRING" ]; then
+            echo "::error::Falta el secret AZURE_STORAGE_CONNECTION_STRING en la configuración del repositorio."
+            exit 1
+          fi
+          ARGS=""
+          [ -n "${{ inputs.section }}" ] && ARGS="$ARGS --section ${{ inputs.section }}"
+          [ "${{ inputs.force }}" = "true" ] && ARGS="$ARGS --force"
+          python backend/tools/make_office_thumbs.py $ARGS
