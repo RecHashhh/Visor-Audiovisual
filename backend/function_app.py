@@ -2107,15 +2107,29 @@ def media_delete(req: func.HttpRequest) -> func.HttpResponse:
         if auth_err:
             return auth_err
         prefix = f"{root}/{folder}/"
+        # En cuentas con espacio de nombres jerárquico (HNS/ADLS Gen2) cada carpeta
+        # es además un blob-marcador de directorio SIN barra final. list con la
+        # barra trae los hijos pero no ese marcador, así que hay que borrarlo aparte
+        # o la carpeta queda como directorio vacío y sigue apareciendo.
+        marker = f"{root}/{folder}"
         try:
             svc = get_blob_service()
             cc = svc.get_container_client(CONTAINER)
-            names = [b.name for b in cc.list_blobs(name_starts_with=prefix)]
-            if not names:
+            blobs = list(cc.list_blobs(name_starts_with=prefix, include=["metadata"]))
+            # La carpeta puede existir solo como marcador (creada y vaciada antes):
+            # no dar 404 si el marcador está aunque no haya hijos.
+            if not blobs and not blob_exists(marker):
                 return err("La carpeta no existe o ya está vacía", 404)
-            deleted = _delete_blobs(cc, names)
-            logging.info("media_delete carpeta %s (%d blobs)", prefix, deleted)
-            return ok({"deleted": deleted, "folderPath": folder})
+            # Cuenta para el usuario: archivos reales, sin marcadores ni .keep.
+            file_count = sum(
+                1 for b in blobs
+                if not _is_dir_marker(b) and not is_marker_file(b.name.split("/")[-1])
+            )
+            names = [b.name for b in blobs]
+            names.append(marker)
+            _delete_blobs(cc, names)
+            logging.info("media_delete carpeta %s (%d archivos)", prefix, file_count)
+            return ok({"deleted": file_count, "folderPath": folder})
         except Exception as exc:
             logging.error("media_delete carpeta: %s", exc)
             return err(str(exc), 500)
@@ -2158,9 +2172,13 @@ def media_delete(req: func.HttpRequest) -> func.HttpResponse:
 
 def _delete_blobs(cc, names: list) -> int:
     """Borra blobs uno a uno y arrastra su miniatura precalculada de _thumbs/.
-    Un 404 no es error: la meta es que el blob no exista al terminar."""
+    Un 404 no es error: la meta es que el blob no exista al terminar.
+
+    De más profundo a menos: en cuentas HNS un marcador de directorio no se puede
+    borrar mientras tenga contenido, así que los hijos (más segmentos de ruta) van
+    antes que la carpeta que los contiene."""
     deleted = 0
-    for name in names:
+    for name in sorted(set(names), key=lambda n: n.count("/"), reverse=True):
         for target in (name, thumb_sidecar_name(name)):
             try:
                 cc.delete_blob(target)
